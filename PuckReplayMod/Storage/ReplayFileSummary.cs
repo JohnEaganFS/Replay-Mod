@@ -12,6 +12,7 @@ namespace PuckReplayMod
         public string RecordedBy;
         public int TickRate;
         public int TotalTicks;
+        public bool IsMetadataComplete;
 
         public float DurationSeconds
         {
@@ -25,5 +26,17 @@ namespace PuckReplayMod
                 return this.TotalTicks / (float)this.TickRate;
             }
         }
+    }
+
+    public class ReplaySummaryCache
+    {
+        public int CacheVersion = 1;
+        public string FileName;
+        public long SizeBytes;
+        public long LastWriteUtcTicks;
+        public string ServerName;
+        public string RecordedBy;
+        public int TickRate;
+        public int TotalTicks;
     }
 }

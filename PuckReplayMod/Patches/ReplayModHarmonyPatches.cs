@@ -47,6 +47,43 @@ namespace PuckReplayMod
         }
     }
 
+    [HarmonyPatch(typeof(UIScoreboard), "AddPlayer")]
+    public static class ScoreboardAddObserverDuringReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(Player player)
+        {
+            if (!ReplayInputBlocker.ShouldHideObserverFromReplayScoreboard(player))
+            {
+                return true;
+            }
+
+            ReplayGameStatePlaybackService.RemoveLocalNonReplayPlayerFromScoreboard();
+            return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(UIView), "Show")]
+    public static class ReplaySelectionViewShowDuringReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(UIView __instance, ref bool __result)
+        {
+            if (!ReplayInputBlocker.IsPlaybackActive() || !ReplayInputBlocker.IsReplaySelectionView(__instance))
+            {
+                return true;
+            }
+
+            if (__instance != null && __instance.IsVisible)
+            {
+                __instance.Hide();
+            }
+
+            __result = false;
+            return false;
+        }
+    }
+
     [HarmonyPatch(typeof(Player), "Client_RequestTeamRpc")]
     public static class PlayerRequestTeamDuringReplayPatch
     {
@@ -145,6 +182,22 @@ namespace PuckReplayMod
         }
     }
 
+    [HarmonyPatch(typeof(Player), "Server_SpawnSpectatorCamera")]
+    public static class PlayerSpawnSpectatorCameraDuringReplayPatch
+    {
+        [HarmonyPrefix]
+        public static void Prefix(Player __instance, ref Vector3 position, ref Quaternion rotation)
+        {
+            if (!ReplayInputBlocker.ShouldUseReplaySpectatorCamera(__instance))
+            {
+                return;
+            }
+
+            position = NativeReplayPlaybackService.ReplaySpectatorSpawnPosition;
+            rotation = NativeReplayPlaybackService.ReplaySpectatorSpawnRotation;
+        }
+    }
+
     internal static class ReplayInputBlocker
     {
         public static bool ShouldBlock(Player player)
@@ -152,6 +205,23 @@ namespace PuckReplayMod
             return IsPlaybackActive() &&
                 player != null &&
                 player.IsLocalPlayer;
+        }
+
+        public static bool ShouldUseReplaySpectatorCamera(Player player)
+        {
+            return IsPlaybackActive() &&
+                player != null &&
+                player.IsLocalPlayer;
+        }
+
+        public static bool ShouldHideObserverFromReplayScoreboard(Player player)
+        {
+            if (!IsPlaybackActive() || player == null || !player.IsLocalPlayer)
+            {
+                return false;
+            }
+
+            return player.IsReplay == null || !player.IsReplay.Value;
         }
 
         public static bool IsPlaybackActive()
@@ -173,6 +243,11 @@ namespace PuckReplayMod
             return player != null &&
                 player.IsReplay != null &&
                 player.IsReplay.Value;
+        }
+
+        public static bool IsReplaySelectionView(UIView view)
+        {
+            return view is UITeamSelect || view is UIPositionSelect;
         }
     }
 }

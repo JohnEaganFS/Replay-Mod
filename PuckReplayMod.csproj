@@ -22,6 +22,8 @@
     <None Include="og_src\**\*.cs" />
     <Compile Remove="og_replaymod_src\**\*.cs" />
     <None Include="og_replaymod_src\**\*.cs" />
+    <Compile Remove="toasterreskin_example_src\**\*.cs" />
+    <None Include="toasterreskin_example_src\**\*.cs" />
   </ItemGroup>
 
   <Target Name="PostBuildMoveDll" AfterTargets="Build">

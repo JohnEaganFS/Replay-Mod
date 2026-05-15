@@ -6,9 +6,10 @@ namespace PuckReplayMod
 {
     public class ReplayPlaybackService
     {
+        private readonly ReplayModSettings settings;
         private readonly ReplayFileReader reader;
         private readonly ClientReplayRecorder recorder;
-        private readonly NativeReplayPlaybackService nativePlayback = new NativeReplayPlaybackService();
+        private readonly NativeReplayPlaybackService nativePlayback;
 
         private ReplaySessionData session;
         private string currentFilePath;
@@ -18,10 +19,12 @@ namespace PuckReplayMod
         private float nativePrepareStartRealtime;
         private float nextSpectatorEnforceRealtime;
 
-        public ReplayPlaybackService(ReplayFileReader reader, ClientReplayRecorder recorder)
+        public ReplayPlaybackService(ReplayModSettings settings, ReplayFileReader reader, ClientReplayRecorder recorder)
         {
+            this.settings = settings;
             this.reader = reader;
             this.recorder = recorder;
+            this.nativePlayback = new NativeReplayPlaybackService(settings);
         }
 
         public bool IsPlaying { get; private set; }
@@ -84,16 +87,19 @@ namespace PuckReplayMod
                     return;
                 }
 
+                this.isPreparingNativePlayback = true;
+                this.IsPlaying = true;
+                this.nativePrepareStartRealtime = Time.realtimeSinceStartup;
+
                 if (this.nativePlayback.TryStartLocalReplaySession())
                 {
                     this.startedLocalSessionForPlayback = true;
-                    this.isPreparingNativePlayback = true;
-                    this.IsPlaying = true;
-                    this.nativePrepareStartRealtime = Time.realtimeSinceStartup;
                     ReplayModLog.Info("Preparing local native replay session for: " + filePath);
                     return;
                 }
 
+                this.isPreparingNativePlayback = false;
+                this.IsPlaying = false;
                 throw new InvalidOperationException("Native replay playback is unavailable: " + this.nativePlayback.GetUnavailableReason());
             }
             catch

@@ -2,13 +2,14 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace PuckReplayMod
 {
     public class ReplayFileReader
     {
-        public List<ReplayFileSummary> GetRecentReplays(string replayDirectory, int maxCount)
+        public List<ReplayFileSummary> GetRecentReplays(string replayDirectory, string summaryDirectory, int maxCount)
         {
             List<ReplayFileSummary> summaries = new List<ReplayFileSummary>();
             if (!Directory.Exists(replayDirectory))
@@ -26,7 +27,7 @@ namespace PuckReplayMod
             {
                 try
                 {
-                    summaries.Add(this.ReadSummary(file.FullName));
+                    summaries.Add(this.ReadSummaryFast(file, summaryDirectory));
                 }
                 catch (Exception exception)
                 {
@@ -37,12 +38,46 @@ namespace PuckReplayMod
             return summaries;
         }
 
-        public ReplayFileSummary ReadSummary(string filePath)
+        public bool IndexNextMissingSummary(string replayDirectory, string summaryDirectory, int maxCount)
+        {
+            if (!Directory.Exists(replayDirectory))
+            {
+                return false;
+            }
+
+            FileInfo[] files = new DirectoryInfo(replayDirectory)
+                .GetFiles("*" + ReplayModConstants.ReplayFileExtension)
+                .OrderByDescending(file => file.LastWriteTimeUtc)
+                .Take(Math.Max(0, maxCount))
+                .ToArray();
+
+            foreach (FileInfo file in files)
+            {
+                if (this.IsSummaryCacheFresh(file, summaryDirectory))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    this.ReadSummary(file.FullName, summaryDirectory);
+                    return true;
+                }
+                catch (Exception exception)
+                {
+                    ReplayModLog.Warning("Failed to index replay summary " + file.FullName + ": " + exception.Message);
+                }
+            }
+
+            return false;
+        }
+
+        public ReplayFileSummary ReadSummary(string filePath, string summaryDirectory)
         {
             JObject root = JObject.Parse(File.ReadAllText(filePath));
             ReplayHeaderDto header = this.ReadHeader(root);
             FileInfo file = new FileInfo(filePath);
-            return new ReplayFileSummary
+            ReplayFileSummary summary = new ReplayFileSummary
             {
                 FilePath = filePath,
                 FileName = file.Name,
@@ -51,8 +86,35 @@ namespace PuckReplayMod
                 ServerName = header.ServerName,
                 RecordedBy = header.RecordedBy,
                 TickRate = header.TickRate,
-                TotalTicks = header.TotalTicks
+                TotalTicks = header.TotalTicks,
+                IsMetadataComplete = true
             };
+
+            this.WriteSummaryCache(summary, summaryDirectory);
+            return summary;
+        }
+
+        public void WriteSummaryCache(ReplayFileSummary summary, string summaryDirectory)
+        {
+            if (summary == null || string.IsNullOrEmpty(summary.FilePath))
+            {
+                return;
+            }
+
+            ReplaySummaryCache cache = new ReplaySummaryCache
+            {
+                FileName = summary.FileName,
+                SizeBytes = summary.SizeBytes,
+                LastWriteUtcTicks = summary.LastWriteUtc.Ticks,
+                ServerName = summary.ServerName,
+                RecordedBy = summary.RecordedBy,
+                TickRate = summary.TickRate,
+                TotalTicks = summary.TotalTicks
+            };
+
+            string summaryPath = GetSummaryPath(summary.FilePath, summaryDirectory);
+            Directory.CreateDirectory(Path.GetDirectoryName(summaryPath));
+            File.WriteAllText(summaryPath, JsonConvert.SerializeObject(cache, Formatting.None));
         }
 
         public ReplaySessionData Load(string filePath)
@@ -83,6 +145,66 @@ namespace PuckReplayMod
             }
 
             return session;
+        }
+
+        public static string GetSummaryPath(string replayFilePath, string summaryDirectory)
+        {
+            return Path.Combine(summaryDirectory, Path.GetFileName(replayFilePath) + ReplayModConstants.ReplaySummaryFileSuffix);
+        }
+
+        private ReplayFileSummary ReadSummaryFast(FileInfo file, string summaryDirectory)
+        {
+            ReplayFileSummary cachedSummary = this.TryReadSummaryCache(file, summaryDirectory);
+            if (cachedSummary != null)
+            {
+                return cachedSummary;
+            }
+
+            return new ReplayFileSummary
+            {
+                FilePath = file.FullName,
+                FileName = file.Name,
+                SizeBytes = file.Length,
+                LastWriteUtc = file.LastWriteTimeUtc,
+                ServerName = Path.GetFileNameWithoutExtension(file.Name),
+                RecordedBy = string.Empty,
+                TickRate = 0,
+                TotalTicks = 0,
+                IsMetadataComplete = false
+            };
+        }
+
+        private ReplayFileSummary TryReadSummaryCache(FileInfo file, string summaryDirectory)
+        {
+            string summaryPath = GetSummaryPath(file.FullName, summaryDirectory);
+            if (!File.Exists(summaryPath))
+            {
+                return null;
+            }
+
+            ReplaySummaryCache cache = JsonConvert.DeserializeObject<ReplaySummaryCache>(File.ReadAllText(summaryPath));
+            if (cache == null || cache.SizeBytes != file.Length || cache.LastWriteUtcTicks != file.LastWriteTimeUtc.Ticks)
+            {
+                return null;
+            }
+
+            return new ReplayFileSummary
+            {
+                FilePath = file.FullName,
+                FileName = file.Name,
+                SizeBytes = file.Length,
+                LastWriteUtc = file.LastWriteTimeUtc,
+                ServerName = cache.ServerName,
+                RecordedBy = cache.RecordedBy,
+                TickRate = cache.TickRate,
+                TotalTicks = cache.TotalTicks,
+                IsMetadataComplete = true
+            };
+        }
+
+        private bool IsSummaryCacheFresh(FileInfo file, string summaryDirectory)
+        {
+            return this.TryReadSummaryCache(file, summaryDirectory) != null;
         }
 
         private ReplayHeaderDto ReadHeader(JObject root)

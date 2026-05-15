@@ -1,25 +1,41 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using Unity.Collections;
 using Unity.Netcode;
+using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace PuckReplayMod
 {
     public class ReplayGameStatePlaybackService
     {
+        private static readonly FieldInfo ScoreboardPlayerMapField = typeof(UIScoreboard).GetField("playerVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo MinimapPlayerBodyMapField = typeof(UIMinimap).GetField("playerBodyVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo MinimapPuckMapField = typeof(UIMinimap).GetField("puckVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo PlayerUsernamesPlayerBodyMapField = typeof(UIPlayerUsernames).GetField("playerBodyVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
+        private readonly ReplayModSettings settings;
         private readonly List<ReplayEventDto> events = new List<ReplayEventDto>();
         private readonly Dictionary<ulong, PlayerSnapshotPayload> playerStates = new Dictionary<ulong, PlayerSnapshotPayload>();
-        private readonly HashSet<ulong> scoreboardPlayers = new HashSet<ulong>();
+        private readonly Dictionary<ulong, Player> scoreboardPlayers = new Dictionary<ulong, Player>();
         private readonly List<ChatMessage> replayChatMessages = new List<ChatMessage>();
 
         private int nextEventIndex;
         private int lastAppliedTick = -1;
         private GameStatePayload gameState;
 
+        public ReplayGameStatePlaybackService(ReplayModSettings settings)
+        {
+            this.settings = settings;
+        }
+
         public void Start(ReplaySessionData session)
         {
             this.Close();
-            this.ClearChatMessages();
+            if (this.settings == null || this.settings.ClearChatOnPlaybackStart)
+            {
+                this.ClearChatMessages();
+            }
             if (session == null || session.Events == null)
             {
                 return;
@@ -36,6 +52,8 @@ namespace PuckReplayMod
                 return;
             }
 
+            RemoveLocalNonReplayPlayerFromScoreboard();
+
             if (replayTick < this.lastAppliedTick)
             {
                 this.Rewind();
@@ -50,11 +68,15 @@ namespace PuckReplayMod
             this.lastAppliedTick = replayTick;
             this.ApplyGameState();
             this.ApplyPlayerStates();
+            RemoveLocalNonReplayPlayerFromScoreboard();
         }
 
         public void Close()
         {
             this.RemoveScoreboardPlayers();
+            RemoveAllReplayPlayersFromScoreboard();
+            RemoveAllReplayObjectsFromMinimap();
+            RemoveAllReplayObjectsFromPlayerUsernames();
             this.ClearChatMessages();
             this.events.Clear();
             this.playerStates.Clear();
@@ -67,6 +89,9 @@ namespace PuckReplayMod
 
         private void Rewind()
         {
+            this.RemoveScoreboardPlayers();
+            RemoveAllReplayObjectsFromMinimap();
+            RemoveAllReplayObjectsFromPlayerUsernames();
             this.playerStates.Clear();
             this.scoreboardPlayers.Clear();
             this.ClearChatMessages();
@@ -161,6 +186,11 @@ namespace PuckReplayMod
 
         private void ApplyChatMessage(ChatMessagePayload payload)
         {
+            if (this.settings != null && !this.settings.ShowReplayChat)
+            {
+                return;
+            }
+
             if (payload == null)
             {
                 return;
@@ -261,19 +291,19 @@ namespace PuckReplayMod
         private void EnsureScoreboardPlayer(ulong originalOwnerClientId, Player replayPlayer)
         {
             UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
-            if (uiManager == null || uiManager.Scoreboard == null || this.scoreboardPlayers.Contains(originalOwnerClientId))
+            if (uiManager == null || uiManager.Scoreboard == null || this.scoreboardPlayers.ContainsKey(originalOwnerClientId))
             {
                 return;
             }
 
             uiManager.Scoreboard.AddPlayer(replayPlayer);
             uiManager.Scoreboard.StylePlayer(replayPlayer);
-            this.scoreboardPlayers.Add(originalOwnerClientId);
+            this.scoreboardPlayers[originalOwnerClientId] = replayPlayer;
         }
 
         private void RemoveScoreboardPlayers()
         {
-            List<ulong> ownerClientIds = new List<ulong>(this.scoreboardPlayers);
+            List<ulong> ownerClientIds = new List<ulong>(this.scoreboardPlayers.Keys);
             foreach (ulong ownerClientId in ownerClientIds)
             {
                 this.RemoveScoreboardPlayer(ownerClientId);
@@ -283,14 +313,273 @@ namespace PuckReplayMod
         private void RemoveScoreboardPlayer(ulong originalOwnerClientId)
         {
             UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
-            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
-            Player replayPlayer = playerManager != null ? playerManager.GetReplayPlayerByClientId(originalOwnerClientId) : null;
+            Player replayPlayer;
+            this.scoreboardPlayers.TryGetValue(originalOwnerClientId, out replayPlayer);
+            if (replayPlayer == null)
+            {
+                PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+                replayPlayer = playerManager != null ? playerManager.GetReplayPlayerByClientId(originalOwnerClientId) : null;
+            }
+
             if (uiManager != null && uiManager.Scoreboard != null && replayPlayer != null)
             {
                 uiManager.Scoreboard.RemovePlayer(replayPlayer);
             }
 
             this.scoreboardPlayers.Remove(originalOwnerClientId);
+        }
+
+        public static void RemoveAllReplayPlayersFromScoreboard()
+        {
+            UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
+            if (uiManager == null || uiManager.Scoreboard == null || ScoreboardPlayerMapField == null)
+            {
+                return;
+            }
+
+            Dictionary<Player, VisualElement> playerRows = ScoreboardPlayerMapField.GetValue(uiManager.Scoreboard) as Dictionary<Player, VisualElement>;
+            if (playerRows == null || playerRows.Count == 0)
+            {
+                return;
+            }
+
+            List<Player> playersToRemove = new List<Player>();
+            foreach (KeyValuePair<Player, VisualElement> entry in playerRows)
+            {
+                if (IsReplayOrDestroyedPlayer(entry.Key))
+                {
+                    playersToRemove.Add(entry.Key);
+                }
+            }
+
+            foreach (Player player in playersToRemove)
+            {
+                VisualElement row;
+                if (playerRows.TryGetValue(player, out row) && row != null && row.parent != null)
+                {
+                    row.parent.Remove(row);
+                }
+
+                playerRows.Remove(player);
+            }
+        }
+
+        public static void RemoveLocalNonReplayPlayerFromScoreboard()
+        {
+            UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
+            if (uiManager == null || uiManager.Scoreboard == null || ScoreboardPlayerMapField == null)
+            {
+                return;
+            }
+
+            Dictionary<Player, VisualElement> playerRows = ScoreboardPlayerMapField.GetValue(uiManager.Scoreboard) as Dictionary<Player, VisualElement>;
+            if (playerRows == null || playerRows.Count == 0)
+            {
+                return;
+            }
+
+            List<Player> playersToRemove = new List<Player>();
+            foreach (KeyValuePair<Player, VisualElement> entry in playerRows)
+            {
+                if (IsLocalNonReplayPlayer(entry.Key))
+                {
+                    playersToRemove.Add(entry.Key);
+                }
+            }
+
+            foreach (Player player in playersToRemove)
+            {
+                VisualElement row;
+                if (playerRows.TryGetValue(player, out row) && row != null && row.parent != null)
+                {
+                    row.parent.Remove(row);
+                }
+
+                playerRows.Remove(player);
+            }
+        }
+
+        public static void RemoveAllReplayObjectsFromMinimap()
+        {
+            UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
+            if (uiManager == null || uiManager.Minimap == null)
+            {
+                return;
+            }
+
+            RemoveReplayMinimapPlayerBodies(uiManager.Minimap);
+            RemoveReplayMinimapPucks(uiManager.Minimap);
+        }
+
+        public static void RemoveAllReplayObjectsFromPlayerUsernames()
+        {
+            UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
+            if (uiManager == null || uiManager.PlayerUsernames == null || PlayerUsernamesPlayerBodyMapField == null)
+            {
+                return;
+            }
+
+            Dictionary<PlayerBody, VisualElement> playerBodyRows = PlayerUsernamesPlayerBodyMapField.GetValue(uiManager.PlayerUsernames) as Dictionary<PlayerBody, VisualElement>;
+            if (playerBodyRows == null || playerBodyRows.Count == 0)
+            {
+                return;
+            }
+
+            List<PlayerBody> bodiesToRemove = new List<PlayerBody>();
+            foreach (KeyValuePair<PlayerBody, VisualElement> entry in playerBodyRows)
+            {
+                if (IsReplayOrDestroyedPlayerBody(entry.Key))
+                {
+                    bodiesToRemove.Add(entry.Key);
+                }
+            }
+
+            foreach (PlayerBody body in bodiesToRemove)
+            {
+                VisualElement row;
+                if (playerBodyRows.TryGetValue(body, out row) && row != null && row.parent != null)
+                {
+                    row.parent.Remove(row);
+                }
+
+                playerBodyRows.Remove(body);
+            }
+        }
+
+        private static void RemoveReplayMinimapPlayerBodies(UIMinimap minimap)
+        {
+            if (MinimapPlayerBodyMapField == null)
+            {
+                return;
+            }
+
+            Dictionary<PlayerBody, VisualElement> playerBodyRows = MinimapPlayerBodyMapField.GetValue(minimap) as Dictionary<PlayerBody, VisualElement>;
+            if (playerBodyRows == null || playerBodyRows.Count == 0)
+            {
+                return;
+            }
+
+            List<PlayerBody> bodiesToRemove = new List<PlayerBody>();
+            foreach (KeyValuePair<PlayerBody, VisualElement> entry in playerBodyRows)
+            {
+                if (IsReplayOrDestroyedPlayerBody(entry.Key))
+                {
+                    bodiesToRemove.Add(entry.Key);
+                }
+            }
+
+            foreach (PlayerBody body in bodiesToRemove)
+            {
+                VisualElement row;
+                if (playerBodyRows.TryGetValue(body, out row) && row != null && row.parent != null)
+                {
+                    row.parent.Remove(row);
+                }
+
+                playerBodyRows.Remove(body);
+            }
+        }
+
+        private static void RemoveReplayMinimapPucks(UIMinimap minimap)
+        {
+            if (MinimapPuckMapField == null)
+            {
+                return;
+            }
+
+            Dictionary<Puck, VisualElement> puckRows = MinimapPuckMapField.GetValue(minimap) as Dictionary<Puck, VisualElement>;
+            if (puckRows == null || puckRows.Count == 0)
+            {
+                return;
+            }
+
+            List<Puck> pucksToRemove = new List<Puck>();
+            foreach (KeyValuePair<Puck, VisualElement> entry in puckRows)
+            {
+                if (IsReplayOrDestroyedPuck(entry.Key))
+                {
+                    pucksToRemove.Add(entry.Key);
+                }
+            }
+
+            foreach (Puck puck in pucksToRemove)
+            {
+                VisualElement row;
+                if (puckRows.TryGetValue(puck, out row) && row != null && row.parent != null)
+                {
+                    row.parent.Remove(row);
+                }
+
+                puckRows.Remove(puck);
+            }
+        }
+
+        private static bool IsReplayOrDestroyedPlayer(Player player)
+        {
+            if (player == null)
+            {
+                return true;
+            }
+
+            try
+            {
+                return player.IsReplay != null && player.IsReplay.Value;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static bool IsLocalNonReplayPlayer(Player player)
+        {
+            if (player == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                return player.IsLocalPlayer && (player.IsReplay == null || !player.IsReplay.Value);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsReplayOrDestroyedPlayerBody(PlayerBody body)
+        {
+            if (body == null || body.Player == null)
+            {
+                return true;
+            }
+
+            try
+            {
+                return body.Player.IsReplay != null && body.Player.IsReplay.Value;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private static bool IsReplayOrDestroyedPuck(Puck puck)
+        {
+            if (puck == null)
+            {
+                return true;
+            }
+
+            try
+            {
+                return puck.IsReplay != null && puck.IsReplay.Value;
+            }
+            catch
+            {
+                return true;
+            }
         }
 
         private void ClearChatMessages()

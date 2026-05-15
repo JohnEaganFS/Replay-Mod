@@ -67,9 +67,10 @@ namespace PuckReplayMod
             this.Reader = new ReplayFileReader();
             this.Recorder = new ClientReplayRecorder(this.Settings, this.Storage);
             this.Recorder.Initialize();
-            this.Playback = new ReplayPlaybackService(this.Reader, this.Recorder);
+            this.Playback = new ReplayPlaybackService(this.Settings, this.Reader, this.Recorder);
             this.Ui = new ReplayModUiService(this.Settings, this.Recorder, this.Storage, this.Reader, this.Playback);
             this.Ui.Initialize();
+            EventManager.AddEventListener("Event_OnClientStarted", this.Event_OnClientStarted);
             EventManager.AddEventListener("Event_OnClientStopped", this.Event_OnClientStopped);
         }
 
@@ -181,6 +182,7 @@ namespace PuckReplayMod
 
         private void OnDestroy()
         {
+            EventManager.RemoveEventListener("Event_OnClientStarted", this.Event_OnClientStarted);
             EventManager.RemoveEventListener("Event_OnClientStopped", this.Event_OnClientStopped);
 
             if (this.Ui != null)
@@ -245,6 +247,17 @@ namespace PuckReplayMod
                 ReplayModLog.Info("Client stopped during replay playback; closing playback.");
                 this.Playback.Close();
             }
+
+            ReplayGameStatePlaybackService.RemoveAllReplayPlayersFromScoreboard();
+            ReplayGameStatePlaybackService.RemoveAllReplayObjectsFromMinimap();
+            ReplayGameStatePlaybackService.RemoveAllReplayObjectsFromPlayerUsernames();
+        }
+
+        private void Event_OnClientStarted(System.Collections.Generic.Dictionary<string, object> message)
+        {
+            ReplayGameStatePlaybackService.RemoveAllReplayPlayersFromScoreboard();
+            ReplayGameStatePlaybackService.RemoveAllReplayObjectsFromMinimap();
+            ReplayGameStatePlaybackService.RemoveAllReplayObjectsFromPlayerUsernames();
         }
     }
 }

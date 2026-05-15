@@ -7,11 +7,20 @@ namespace PuckReplayMod
 {
     public class NativeReplayPlaybackService
     {
+        internal static readonly Vector3 ReplaySpectatorSpawnPosition = new Vector3(0f, 6f, 0f);
+        internal static readonly Quaternion ReplaySpectatorSpawnRotation = Quaternion.Euler(22f, 0f, 0f);
+
         private readonly NativeReplayEventConverter converter = new NativeReplayEventConverter();
-        private readonly ReplayGameStatePlaybackService gameStatePlayback = new ReplayGameStatePlaybackService();
+        private readonly ReplayGameStatePlaybackService gameStatePlayback;
 
         private ReplayPlayer replayPlayer;
         private string currentFilePath;
+        private bool replaySpectatorCameraAdjusted;
+
+        public NativeReplayPlaybackService(ReplayModSettings settings)
+        {
+            this.gameStatePlayback = new ReplayGameStatePlaybackService(settings);
+        }
 
         public bool IsPlaying { get; private set; }
 
@@ -59,6 +68,7 @@ namespace PuckReplayMod
                 return false;
             }
 
+            this.replaySpectatorCameraAdjusted = false;
             ReplayModLog.Info("Starting local practice session for native replay playback.");
             EventManager.TriggerEvent("Event_OnPlayClickPractice", null);
             return true;
@@ -109,6 +119,7 @@ namespace PuckReplayMod
                 this.replayPlayer.Server_StopReplay();
             }
 
+            this.replaySpectatorCameraAdjusted = false;
             this.PrepareSceneForReplay();
             int tickRate = session != null && session.Header != null ? Math.Max(1, session.Header.TickRate) : 30;
             this.replayPlayer.Server_StartReplay(eventMap, tickRate, 0);
@@ -151,15 +162,18 @@ namespace PuckReplayMod
             this.IsPlaying = false;
             this.currentFilePath = null;
             this.replayPlayer = null;
+            this.replaySpectatorCameraAdjusted = false;
         }
 
         public void EnforceSpectatorMode()
         {
             try
             {
+                HideReplaySelectionViews();
+
                 PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
                 Player localPlayer = playerManager != null ? playerManager.GetLocalPlayer() : null;
-                if (localPlayer == null || !NetworkManager.Singleton.IsServer)
+                if (localPlayer == null || NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer)
                 {
                     return;
                 }
@@ -170,10 +184,46 @@ namespace PuckReplayMod
                 }
 
                 localPlayer.Server_SetGameState(PlayerPhase.Spectate, PlayerTeam.Spectator, PlayerRole.None, null);
+                this.EnsureReplaySpectatorCameraRaised(localPlayer);
             }
             catch (Exception exception)
             {
                 ReplayModLog.Warning("Failed to enforce replay spectator mode: " + exception.Message);
+            }
+        }
+
+        private void EnsureReplaySpectatorCameraRaised(Player localPlayer)
+        {
+            if (this.replaySpectatorCameraAdjusted || localPlayer == null || !localPlayer.IsSpectatorCameraSpawned || localPlayer.SpectatorCamera == null)
+            {
+                return;
+            }
+
+            if (localPlayer.SpectatorCamera.transform.position.y < 2f)
+            {
+                localPlayer.Server_DespawnSpectatorCamera();
+                localPlayer.Server_SpawnSpectatorCamera(ReplaySpectatorSpawnPosition, ReplaySpectatorSpawnRotation);
+            }
+
+            this.replaySpectatorCameraAdjusted = true;
+        }
+
+        private static void HideReplaySelectionViews()
+        {
+            UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
+            if (uiManager == null)
+            {
+                return;
+            }
+
+            if (uiManager.TeamSelect != null && uiManager.TeamSelect.IsVisible)
+            {
+                uiManager.TeamSelect.Hide();
+            }
+
+            if (uiManager.PositionSelect != null && uiManager.PositionSelect.IsVisible)
+            {
+                uiManager.PositionSelect.Hide();
             }
         }
 

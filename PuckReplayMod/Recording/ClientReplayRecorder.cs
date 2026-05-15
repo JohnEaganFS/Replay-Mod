@@ -223,8 +223,17 @@ namespace PuckReplayMod
 
             if (save && session.Events.Count > 0)
             {
-                this.storage.SaveReplay(session);
-                this.storage.CleanupOldReplays(this.settings.StorageLimitMb);
+                float durationSeconds = session.Header.TickRate > 0 ? session.Header.TotalTicks / (float)session.Header.TickRate : 0f;
+                if (this.settings.MinimumReplayLengthSeconds > 0 && durationSeconds < this.settings.MinimumReplayLengthSeconds)
+                {
+                    ReplayModLog.Info("Discarded short replay (" + durationSeconds.ToString("0.0") + "s, minimum " + this.settings.MinimumReplayLengthSeconds + "s).");
+                }
+                else
+                {
+                    this.storage.SaveReplay(session);
+                    this.storage.CleanupShortReplays(this.settings.MinimumReplayLengthSeconds);
+                    this.storage.CleanupOldReplays(this.settings.StorageLimitMb);
+                }
             }
 
             this.ClearActiveObjects();

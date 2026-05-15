@@ -13,17 +13,40 @@ namespace PuckReplayMod
         private readonly ReplayStorageService storage;
         private readonly ReplayFileReader reader;
         private readonly ReplayPlaybackService playback;
+        private readonly List<Button> sectionButtons = new List<Button>();
+        private readonly List<string> sectionNames = new List<string>
+        {
+            "Library",
+            "Playback",
+            "Recording",
+            "Display",
+            "Storage",
+            "Advanced"
+        };
 
         private VisualElement root;
-        private VisualElement libraryPanel;
-        private VisualElement replayList;
+        private VisualElement managerPanel;
+        private VisualElement content;
         private Label statusLabel;
         private Label timelineLabel;
-        private Label storageLabel;
-        private Label playbackLabel;
-        private bool isLibraryVisible;
+        private bool isManagerVisible;
         private bool mainMenuButtonAttached;
         private bool pauseMenuButtonAttached;
+        private bool isMainMenuVisible = true;
+        private string selectedSection = "Library";
+        private float nextReplayIndexRealtime;
+
+        internal ReplayModSettings Settings { get { return this.settings; } }
+        internal ClientReplayRecorder Recorder { get { return this.recorder; } }
+        internal ReplayStorageService Storage { get { return this.storage; } }
+        internal ReplayFileReader Reader { get { return this.reader; } }
+        internal ReplayPlaybackService Playback { get { return this.playback; } }
+        internal VisualElement ReplayList { get; set; }
+        internal Label StorageLabel { get; set; }
+        internal Label StorageUsageLabel { get; set; }
+        internal Label PlaybackLabel { get; set; }
+        internal Label StatusLabel { get { return this.statusLabel; } }
+        internal Label TimelineLabel { get { return this.timelineLabel; } }
 
         public ReplayModUiService(ReplayModSettings settings, ClientReplayRecorder recorder, ReplayStorageService storage, ReplayFileReader reader, ReplayPlaybackService playback)
         {
@@ -38,26 +61,28 @@ namespace PuckReplayMod
 
         public void Initialize()
         {
-            EventManager.AddEventListener("Event_OnClientStarted", this.Event_HideLibrary);
-            EventManager.AddEventListener("Event_OnClientStopped", this.Event_HideLibrary);
-            EventManager.AddEventListener("Event_OnMainMenuHide", this.Event_HideLibrary);
-            EventManager.AddEventListener("Event_OnMainMenuClickPlay", this.Event_HideLibrary);
-            EventManager.AddEventListener("Event_OnPauseMenuClickSelectTeam", this.Event_HideLibrary);
-            EventManager.AddEventListener("Event_OnPauseMenuClickSelectPosition", this.Event_HideLibrary);
-            EventManager.AddEventListener("Event_OnPauseMenuClickServerBrowser", this.Event_HideLibrary);
-            EventManager.AddEventListener("Event_OnPauseMenuClickDisconnect", this.Event_HideLibrary);
+            EventManager.AddEventListener("Event_OnClientStarted", this.Event_HideManager);
+            EventManager.AddEventListener("Event_OnClientStopped", this.Event_HideManager);
+            EventManager.AddEventListener("Event_OnMainMenuShow", this.Event_OnMainMenuShow);
+            EventManager.AddEventListener("Event_OnMainMenuHide", this.Event_OnMainMenuHide);
+            EventManager.AddEventListener("Event_OnMainMenuClickPlay", this.Event_HideManager);
+            EventManager.AddEventListener("Event_OnPauseMenuClickSelectTeam", this.Event_HideManager);
+            EventManager.AddEventListener("Event_OnPauseMenuClickSelectPosition", this.Event_HideManager);
+            EventManager.AddEventListener("Event_OnPauseMenuClickServerBrowser", this.Event_HideManager);
+            EventManager.AddEventListener("Event_OnPauseMenuClickDisconnect", this.Event_HideManager);
         }
 
         public void Dispose()
         {
-            EventManager.RemoveEventListener("Event_OnClientStarted", this.Event_HideLibrary);
-            EventManager.RemoveEventListener("Event_OnClientStopped", this.Event_HideLibrary);
-            EventManager.RemoveEventListener("Event_OnMainMenuHide", this.Event_HideLibrary);
-            EventManager.RemoveEventListener("Event_OnMainMenuClickPlay", this.Event_HideLibrary);
-            EventManager.RemoveEventListener("Event_OnPauseMenuClickSelectTeam", this.Event_HideLibrary);
-            EventManager.RemoveEventListener("Event_OnPauseMenuClickSelectPosition", this.Event_HideLibrary);
-            EventManager.RemoveEventListener("Event_OnPauseMenuClickServerBrowser", this.Event_HideLibrary);
-            EventManager.RemoveEventListener("Event_OnPauseMenuClickDisconnect", this.Event_HideLibrary);
+            EventManager.RemoveEventListener("Event_OnClientStarted", this.Event_HideManager);
+            EventManager.RemoveEventListener("Event_OnClientStopped", this.Event_HideManager);
+            EventManager.RemoveEventListener("Event_OnMainMenuShow", this.Event_OnMainMenuShow);
+            EventManager.RemoveEventListener("Event_OnMainMenuHide", this.Event_OnMainMenuHide);
+            EventManager.RemoveEventListener("Event_OnMainMenuClickPlay", this.Event_HideManager);
+            EventManager.RemoveEventListener("Event_OnPauseMenuClickSelectTeam", this.Event_HideManager);
+            EventManager.RemoveEventListener("Event_OnPauseMenuClickSelectPosition", this.Event_HideManager);
+            EventManager.RemoveEventListener("Event_OnPauseMenuClickServerBrowser", this.Event_HideManager);
+            EventManager.RemoveEventListener("Event_OnPauseMenuClickDisconnect", this.Event_HideManager);
             this.recorder.RecordingStateChanged -= this.RefreshStatusIndicator;
             this.recorder.TickAdvanced -= this.RefreshStatusIndicator;
 
@@ -67,12 +92,17 @@ namespace PuckReplayMod
             }
 
             this.root = null;
-            this.libraryPanel = null;
-            this.replayList = null;
+            this.managerPanel = null;
+            this.content = null;
             this.statusLabel = null;
             this.timelineLabel = null;
-            this.storageLabel = null;
-            this.playbackLabel = null;
+            this.ReplayList = null;
+            this.StorageLabel = null;
+            this.StorageUsageLabel = null;
+            this.PlaybackLabel = null;
+            this.sectionButtons.Clear();
+            this.isManagerVisible = false;
+            this.isMainMenuVisible = true;
             this.mainMenuButtonAttached = false;
             this.pauseMenuButtonAttached = false;
         }
@@ -81,6 +111,7 @@ namespace PuckReplayMod
         {
             this.RefreshStatusIndicator();
             this.RefreshPlaybackStatus();
+            this.TickReplayLibraryIndex();
         }
 
         public void TryAttachToExistingUi()
@@ -106,13 +137,16 @@ namespace PuckReplayMod
             if (this.root != null && this.root.parent == null)
             {
                 this.root = null;
-                this.libraryPanel = null;
-                this.replayList = null;
+                this.managerPanel = null;
+                this.content = null;
                 this.statusLabel = null;
                 this.timelineLabel = null;
-                this.storageLabel = null;
-                this.playbackLabel = null;
-                this.isLibraryVisible = false;
+                this.ReplayList = null;
+                this.StorageLabel = null;
+                this.StorageUsageLabel = null;
+                this.PlaybackLabel = null;
+                this.sectionButtons.Clear();
+                this.isManagerVisible = false;
                 this.mainMenuButtonAttached = false;
                 this.pauseMenuButtonAttached = false;
             }
@@ -135,8 +169,9 @@ namespace PuckReplayMod
 
             this.CreateStatusIndicator();
             this.CreateTimelineIndicator();
-            this.CreateLibraryPanel();
+            this.CreateManagerPanel();
             uiManager.RootVisualElement.Add(this.root);
+            this.SyncMainMenuVisibilityFromUi();
             this.RefreshStatusIndicator();
             this.RefreshTimelineIndicator();
         }
@@ -163,6 +198,170 @@ namespace PuckReplayMod
             this.pauseMenuButtonAttached = this.AttachReplayButton(pauseMenu, "PuckReplayModPauseMenuButton");
         }
 
+        internal void SaveSettings()
+        {
+            this.settings.Save();
+            this.RefreshLibraryText();
+            this.RefreshStorageUsage();
+        }
+
+        internal void RefreshLibraryText()
+        {
+            if (this.StorageLabel == null)
+            {
+                return;
+            }
+
+            int replayCount = 0;
+            if (Directory.Exists(this.storage.ReplaysDirectory))
+            {
+                replayCount = Directory.GetFiles(this.storage.ReplaysDirectory, "*" + ReplayModConstants.ReplayFileExtension).Length;
+            }
+
+            string recordingState = this.recorder.IsRecording ? "Recording now" : (this.settings.AutoRecord ? "Ready to record" : "Automatic recording is off");
+            this.StorageLabel.text = "Saved replays: " + replayCount + "\nStatus: " + recordingState + "\nReplay smoothness: " + ReplayRecordingSettingsSection.FormatCaptureRate(this.settings.CaptureTickRate);
+        }
+
+        internal void RefreshReplayList()
+        {
+            ReplayLibrarySection.RefreshReplayList(this);
+        }
+
+        internal void RefreshStorageUsage()
+        {
+            ReplayStorageSection.RefreshStorageUsage(this);
+        }
+
+        internal void PlayReplay(string filePath)
+        {
+            if (this.recorder.IsRecording)
+            {
+                ReplayModLog.Warning("Cannot start replay playback while recording a live session.");
+                return;
+            }
+
+            try
+            {
+                this.playback.Play(filePath);
+                this.RefreshPlaybackStatus();
+                this.HideManager();
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Failed to play replay " + filePath + ": " + exception.Message);
+            }
+        }
+
+        internal void RefreshPlaybackStatus()
+        {
+            this.RefreshTimelineIndicator();
+            if (this.PlaybackLabel == null)
+            {
+                return;
+            }
+
+            if (this.playback.IsPlaying)
+            {
+                this.PlaybackLabel.text = "Watching replay: " + this.FormatPlaybackTime(this.playback.CurrentTick) + " / " + this.FormatPlaybackTime(this.playback.TotalTicks);
+                return;
+            }
+
+            this.PlaybackLabel.text = "Not watching a replay.";
+        }
+
+        internal void RefreshTimelineIndicator()
+        {
+            if (this.timelineLabel == null)
+            {
+                return;
+            }
+
+            if (!this.settings.ShowPlaybackTimeline || !this.playback.IsPlaying)
+            {
+                this.timelineLabel.style.display = DisplayStyle.None;
+                return;
+            }
+
+            int currentTick = Math.Max(0, this.playback.CurrentTick);
+            int totalTicks = Math.Max(currentTick, this.playback.TotalTicks);
+            this.timelineLabel.text = "REPLAY  " + this.FormatPlaybackTime(currentTick) + " / " + this.FormatPlaybackTime(totalTicks);
+            this.timelineLabel.style.display = DisplayStyle.Flex;
+        }
+
+        internal void RefreshStatusIndicator()
+        {
+            if (this.statusLabel == null)
+            {
+                return;
+            }
+
+            if (this.isMainMenuVisible)
+            {
+                this.statusLabel.style.display = DisplayStyle.None;
+                return;
+            }
+
+            bool shouldShowReady = this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.Always;
+            bool shouldShowPlayback = this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.Always ||
+                this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.RecordingAndPlayback;
+            bool shouldShowRecording = this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.Always ||
+                this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.RecordingAndPlayback ||
+                this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.RecordingOnly;
+
+            if (this.recorder.IsRecording)
+            {
+                this.statusLabel.style.display = shouldShowRecording ? DisplayStyle.Flex : DisplayStyle.None;
+                this.statusLabel.text = "REPLAY MOD  REC  " + this.recorder.CurrentTick;
+                this.statusLabel.style.backgroundColor = new Color(0.55f, 0.05f, 0.06f, 0.9f);
+                return;
+            }
+
+            if (this.recorder.IsRecordingSuppressed)
+            {
+                this.statusLabel.style.display = shouldShowPlayback ? DisplayStyle.Flex : DisplayStyle.None;
+                this.statusLabel.text = "REPLAY MOD  PLAYBACK";
+                this.statusLabel.style.backgroundColor = new Color(0.1f, 0.18f, 0.32f, 0.9f);
+                return;
+            }
+
+            this.statusLabel.style.display = shouldShowReady ? DisplayStyle.Flex : DisplayStyle.None;
+            this.statusLabel.text = "REPLAY MOD  READY";
+            this.statusLabel.style.backgroundColor = new Color(0.05f, 0.05f, 0.05f, 0.72f);
+        }
+
+        internal void ApplyOverlayPosition(VisualElement element, ReplayOverlayPosition position, float offset)
+        {
+            if (element == null)
+            {
+                return;
+            }
+
+            element.style.left = StyleKeyword.Auto;
+            element.style.right = StyleKeyword.Auto;
+            element.style.top = StyleKeyword.Auto;
+            element.style.bottom = StyleKeyword.Auto;
+
+            switch (position)
+            {
+                case ReplayOverlayPosition.TopLeft:
+                    element.style.left = 18f;
+                    element.style.top = offset;
+                    break;
+                case ReplayOverlayPosition.BottomRight:
+                    element.style.right = 18f;
+                    element.style.bottom = offset;
+                    break;
+                case ReplayOverlayPosition.BottomLeft:
+                    element.style.left = 18f;
+                    element.style.bottom = offset;
+                    break;
+                default:
+                    element.style.right = 18f;
+                    element.style.top = offset;
+                    break;
+            }
+        }
+
         private bool AttachReplayButton(VisualElement menu, string name)
         {
             if (menu == null || menu.Q<Button>(name) != null)
@@ -171,12 +370,12 @@ namespace PuckReplayMod
             }
 
             Button referenceButton = menu.Q<Button>("ModsButton") ?? menu.Q<Button>("SettingsButton") ?? menu.Q<Button>("ServerBrowserButton");
-            Button button = new Button(this.ToggleLibrary)
+            Button button = new Button(this.ToggleManager)
             {
                 name = name,
                 text = "REPLAYS"
             };
-            this.MatchMenuButtonStyle(referenceButton, button);
+            ReplayUiTools.StyleMenuAccessButton(referenceButton, button);
 
             if (referenceButton != null && referenceButton.parent == menu)
             {
@@ -190,41 +389,6 @@ namespace PuckReplayMod
             return true;
         }
 
-        private void MatchMenuButtonStyle(Button referenceButton, Button button)
-        {
-            if (referenceButton == null)
-            {
-                return;
-            }
-
-            foreach (string className in referenceButton.GetClasses())
-            {
-                button.AddToClassList(className);
-            }
-
-            if (!float.IsNaN(referenceButton.resolvedStyle.width) && referenceButton.resolvedStyle.width > 0f)
-            {
-                button.style.width = referenceButton.resolvedStyle.width;
-            }
-
-            if (!float.IsNaN(referenceButton.resolvedStyle.height) && referenceButton.resolvedStyle.height > 0f)
-            {
-                button.style.height = referenceButton.resolvedStyle.height;
-                button.style.marginLeft = referenceButton.resolvedStyle.marginLeft;
-                button.style.marginRight = referenceButton.resolvedStyle.marginRight;
-                button.style.marginTop = referenceButton.resolvedStyle.marginTop;
-                button.style.marginBottom = referenceButton.resolvedStyle.marginBottom;
-                button.style.paddingLeft = referenceButton.resolvedStyle.paddingLeft;
-                button.style.paddingRight = referenceButton.resolvedStyle.paddingRight;
-                button.style.paddingTop = referenceButton.resolvedStyle.paddingTop;
-                button.style.paddingBottom = referenceButton.resolvedStyle.paddingBottom;
-            }
-
-            button.style.fontSize = referenceButton.resolvedStyle.fontSize;
-            button.style.unityTextAlign = referenceButton.resolvedStyle.unityTextAlign;
-            button.style.unityFontStyleAndWeight = referenceButton.resolvedStyle.unityFontStyleAndWeight;
-        }
-
         private void CreateStatusIndicator()
         {
             this.statusLabel = new Label("IDLE")
@@ -232,8 +396,6 @@ namespace PuckReplayMod
                 name = "PuckReplayModStatus"
             };
             this.statusLabel.style.position = Position.Absolute;
-            this.statusLabel.style.right = 18f;
-            this.statusLabel.style.top = 18f;
             this.statusLabel.style.paddingLeft = 8f;
             this.statusLabel.style.paddingRight = 8f;
             this.statusLabel.style.paddingTop = 4f;
@@ -243,6 +405,7 @@ namespace PuckReplayMod
             this.statusLabel.style.fontSize = 13f;
             this.statusLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
             this.statusLabel.pickingMode = PickingMode.Ignore;
+            this.ApplyOverlayPosition(this.statusLabel, this.settings.StatusIndicatorPosition, 76f);
             this.root.Add(this.statusLabel);
         }
 
@@ -253,8 +416,6 @@ namespace PuckReplayMod
                 name = "PuckReplayModTimeline"
             };
             this.timelineLabel.style.position = Position.Absolute;
-            this.timelineLabel.style.right = 18f;
-            this.timelineLabel.style.top = 52f;
             this.timelineLabel.style.paddingLeft = 8f;
             this.timelineLabel.style.paddingRight = 8f;
             this.timelineLabel.style.paddingTop = 4f;
@@ -264,242 +425,271 @@ namespace PuckReplayMod
             this.timelineLabel.style.fontSize = 12f;
             this.timelineLabel.style.display = DisplayStyle.None;
             this.timelineLabel.pickingMode = PickingMode.Ignore;
+            this.ApplyOverlayPosition(this.timelineLabel, this.settings.PlaybackTimelinePosition, 110f);
             this.root.Add(this.timelineLabel);
         }
 
-        private void CreateLibraryPanel()
+        private void CreateManagerPanel()
         {
-            this.libraryPanel = new VisualElement
+            this.managerPanel = new VisualElement
             {
-                name = "PuckReplayModLibrary"
+                name = "PuckReplayModManager"
             };
-            this.libraryPanel.style.position = Position.Absolute;
-            this.libraryPanel.style.left = 80f;
-            this.libraryPanel.style.top = 80f;
-            this.libraryPanel.style.width = 520f;
-            this.libraryPanel.style.minHeight = 260f;
-            this.libraryPanel.style.paddingLeft = 16f;
-            this.libraryPanel.style.paddingRight = 16f;
-            this.libraryPanel.style.paddingTop = 14f;
-            this.libraryPanel.style.paddingBottom = 14f;
-            this.libraryPanel.style.backgroundColor = new Color(0.08f, 0.09f, 0.1f, 0.94f);
-            this.libraryPanel.style.display = DisplayStyle.None;
-            this.libraryPanel.pickingMode = PickingMode.Ignore;
+            this.managerPanel.style.position = Position.Absolute;
+            this.managerPanel.style.left = new StyleLength(new Length(50f, LengthUnit.Percent));
+            this.managerPanel.style.top = new StyleLength(new Length(50f, LengthUnit.Percent));
+            this.managerPanel.style.translate = new Translate(new Length(-50f, LengthUnit.Percent), new Length(-50f, LengthUnit.Percent));
+            this.managerPanel.style.width = new StyleLength(new Length(72f, LengthUnit.Percent));
+            this.managerPanel.style.maxWidth = 980f;
+            this.managerPanel.style.minWidth = 660f;
+            this.managerPanel.style.height = new StyleLength(new Length(76f, LengthUnit.Percent));
+            this.managerPanel.style.maxHeight = 720f;
+            this.managerPanel.style.minHeight = 460f;
+            this.managerPanel.style.backgroundColor = new StyleColor(ReplayUiTools.PanelColor);
+            this.managerPanel.style.display = DisplayStyle.None;
+            this.managerPanel.pickingMode = PickingMode.Ignore;
 
-            Label title = new Label("REPLAYS");
-            title.style.fontSize = 18f;
+            this.CreateManagerHeader();
+            this.CreateManagerBody();
+            this.CreateManagerFooter();
+
+            this.root.Add(this.managerPanel);
+            this.ShowSection(this.selectedSection);
+        }
+
+        private void CreateManagerHeader()
+        {
+            VisualElement header = new VisualElement();
+            header.style.flexDirection = FlexDirection.Row;
+            header.style.alignItems = Align.Center;
+            header.style.justifyContent = Justify.SpaceBetween;
+            header.style.height = 70f;
+            header.style.minHeight = 70f;
+            header.style.paddingLeft = 14f;
+            header.style.paddingRight = 14f;
+            header.style.backgroundColor = new StyleColor(ReplayUiTools.HeaderColor);
+
+            Label title = new Label("Replay Manager");
+            title.style.fontSize = 28f;
             title.style.color = Color.white;
             title.style.unityFontStyleAndWeight = FontStyle.Bold;
-            this.libraryPanel.Add(title);
+            header.Add(title);
 
-            this.storageLabel = new Label();
-            this.storageLabel.style.marginTop = 8f;
-            this.storageLabel.style.color = new Color(0.82f, 0.86f, 0.9f, 1f);
-            this.storageLabel.style.whiteSpace = WhiteSpace.Normal;
-            this.libraryPanel.Add(this.storageLabel);
-
-            this.playbackLabel = new Label();
-            this.playbackLabel.style.marginTop = 8f;
-            this.playbackLabel.style.color = new Color(0.76f, 0.82f, 0.88f, 1f);
-            this.playbackLabel.style.whiteSpace = WhiteSpace.Normal;
-            this.libraryPanel.Add(this.playbackLabel);
-
-            this.replayList = new VisualElement
-            {
-                name = "PuckReplayModReplayList"
-            };
-            this.replayList.style.marginTop = 10f;
-            this.libraryPanel.Add(this.replayList);
-
-            Button markerButton = new Button(delegate
-            {
-                this.recorder.AddMarker();
-            })
-            {
-                text = "ADD MARKER"
-            };
-            markerButton.style.marginTop = 12f;
-            markerButton.style.height = 34f;
-            this.libraryPanel.Add(markerButton);
-
-            Button stopPlaybackButton = new Button(delegate
-            {
-                this.playback.Close();
-                this.RefreshPlaybackStatus();
-            })
-            {
-                text = "CLOSE PLAYBACK"
-            };
-            stopPlaybackButton.style.marginTop = 8f;
-            stopPlaybackButton.style.height = 34f;
-            this.libraryPanel.Add(stopPlaybackButton);
-
-            Button closeButton = new Button(this.HideLibrary)
-            {
-                text = "CLOSE"
-            };
-            closeButton.style.marginTop = 8f;
-            closeButton.style.height = 34f;
-            this.libraryPanel.Add(closeButton);
-
-            this.root.Add(this.libraryPanel);
+            Button closeButton = ReplayUiTools.CreateButton("CLOSE", this.HideManager);
+            closeButton.text = "X";
+            closeButton.style.width = 42f;
+            closeButton.style.minWidth = 42f;
+            closeButton.style.height = 42f;
+            closeButton.style.minHeight = 42f;
+            closeButton.style.paddingLeft = 0f;
+            closeButton.style.paddingRight = 0f;
+            closeButton.style.paddingTop = 0f;
+            closeButton.style.paddingBottom = 0f;
+            closeButton.style.fontSize = 22f;
+            closeButton.style.unityFontStyleAndWeight = FontStyle.Bold;
+            header.Add(closeButton);
+            this.managerPanel.Add(header);
         }
 
-        private void ToggleLibrary()
+        private void CreateManagerBody()
         {
-            if (this.isLibraryVisible)
+            VisualElement body = new VisualElement();
+            body.style.flexDirection = FlexDirection.Row;
+            body.style.flexGrow = 1f;
+
+            VisualElement sidebar = new VisualElement();
+            sidebar.style.width = new StyleLength(new Length(28f, LengthUnit.Percent));
+            sidebar.style.minWidth = 190f;
+            sidebar.style.maxWidth = 250f;
+            sidebar.style.backgroundColor = new StyleColor(ReplayUiTools.ControlColor);
+            sidebar.style.flexShrink = 0f;
+            body.Add(sidebar);
+
+            ScrollView sidebarScroll = new ScrollView();
+            sidebarScroll.style.flexGrow = 1f;
+            sidebar.Add(sidebarScroll);
+
+            for (int i = 0; i < this.sectionNames.Count; i++)
             {
-                this.HideLibrary();
-                return;
-            }
-
-            this.ShowLibrary();
-        }
-
-        private void ShowLibrary()
-        {
-            if (this.libraryPanel == null)
-            {
-                return;
-            }
-
-            this.isLibraryVisible = true;
-            this.libraryPanel.style.display = DisplayStyle.Flex;
-            this.root.pickingMode = PickingMode.Ignore;
-            this.libraryPanel.pickingMode = PickingMode.Position;
-            this.RefreshLibraryText();
-            this.RefreshReplayList();
-            this.RefreshPlaybackStatus();
-        }
-
-        private void HideLibrary()
-        {
-            if (this.libraryPanel == null)
-            {
-                return;
-            }
-
-            this.isLibraryVisible = false;
-            this.libraryPanel.style.display = DisplayStyle.None;
-            this.root.pickingMode = PickingMode.Ignore;
-            this.libraryPanel.pickingMode = PickingMode.Ignore;
-        }
-
-        private void Event_HideLibrary(System.Collections.Generic.Dictionary<string, object> message)
-        {
-            this.HideLibrary();
-        }
-
-        private void RefreshLibraryText()
-        {
-            if (this.storageLabel == null)
-            {
-                return;
-            }
-
-            int replayCount = 0;
-            if (Directory.Exists(this.storage.ReplaysDirectory))
-            {
-                replayCount = Directory.GetFiles(this.storage.ReplaysDirectory, "*" + ReplayModConstants.ReplayFileExtension).Length;
-            }
-
-            this.storageLabel.text = "Stored replays: " + replayCount + "\nFolder: " + this.storage.ReplaysDirectory + "\nCapture: " + this.settings.CaptureTickRate + " ticks/sec";
-        }
-
-        private void RefreshReplayList()
-        {
-            if (this.replayList == null)
-            {
-                return;
-            }
-
-            this.replayList.Clear();
-            List<ReplayFileSummary> replays = this.reader.GetRecentReplays(this.storage.ReplaysDirectory, 6);
-            if (replays.Count == 0)
-            {
-                Label emptyLabel = new Label("No replays found.");
-                emptyLabel.style.color = new Color(0.76f, 0.82f, 0.88f, 1f);
-                this.replayList.Add(emptyLabel);
-                return;
-            }
-
-            foreach (ReplayFileSummary replay in replays)
-            {
-                ReplayFileSummary selectedReplay = replay;
-                Button replayButton = new Button(delegate
+                string sectionName = this.sectionNames[i];
+                Button sectionButton = ReplayUiTools.CreateSidebarButton(sectionName, delegate
                 {
-                    this.PlayReplay(selectedReplay.FilePath);
-                })
-                {
-                    text = this.FormatReplayButtonText(selectedReplay)
-                };
-                replayButton.style.height = 34f;
-                replayButton.style.marginTop = 4f;
-                this.replayList.Add(replayButton);
+                    this.ShowSection(sectionName);
+                });
+                this.sectionButtons.Add(sectionButton);
+                sidebarScroll.Add(sectionButton);
             }
-        }
 
-        private string FormatReplayButtonText(ReplayFileSummary replay)
-        {
-            return "PLAY  " + replay.LastWriteUtc.ToLocalTime().ToString("MM/dd HH:mm") +
-                "  " + replay.DurationSeconds.ToString("0") + "s  " +
-                replay.ServerName;
-        }
+            ScrollView scrollView = new ScrollView(ScrollViewMode.Vertical);
+            scrollView.style.flexGrow = 1f;
+            scrollView.horizontalScrollerVisibility = ScrollerVisibility.Hidden;
 
-        private void PlayReplay(string filePath)
-        {
-            if (this.recorder.IsRecording)
+            this.content = new VisualElement
             {
-                ReplayModLog.Warning("Cannot start replay playback while recording a live session.");
+                name = "PuckReplayModManagerContent"
+            };
+            this.content.style.paddingLeft = 18f;
+            this.content.style.paddingRight = 18f;
+            this.content.style.paddingTop = 16f;
+            this.content.style.paddingBottom = 16f;
+            scrollView.Add(this.content);
+            body.Add(scrollView);
+            this.managerPanel.Add(body);
+        }
+
+        private void CreateManagerFooter()
+        {
+            VisualElement footer = new VisualElement();
+            footer.style.height = 10f;
+            footer.style.minHeight = 10f;
+            footer.style.backgroundColor = new StyleColor(ReplayUiTools.HeaderColor);
+            this.managerPanel.Add(footer);
+        }
+
+        private void ShowSection(string sectionName)
+        {
+            if (this.content == null)
+            {
                 return;
             }
+
+            this.selectedSection = sectionName;
+            this.ReplayList = null;
+            this.StorageLabel = null;
+            this.StorageUsageLabel = null;
+            this.PlaybackLabel = null;
+            this.content.Clear();
+
+            if (sectionName == "Playback")
+            {
+                ReplayPlaybackSection.Create(this, this.content);
+            }
+            else if (sectionName == "Recording")
+            {
+                ReplayRecordingSettingsSection.Create(this, this.content);
+            }
+            else if (sectionName == "Display")
+            {
+                ReplayOverlaySettingsSection.Create(this, this.content);
+            }
+            else if (sectionName == "Storage")
+            {
+                ReplayStorageSection.Create(this, this.content);
+            }
+            else if (sectionName == "Advanced")
+            {
+                ReplayAdvancedSettingsSection.Create(this, this.content);
+            }
+            else
+            {
+                ReplayLibrarySection.Create(this, this.content);
+            }
+
+            this.UpdateSidebarSelection();
+        }
+
+        private void UpdateSidebarSelection()
+        {
+            for (int i = 0; i < this.sectionButtons.Count; i++)
+            {
+                bool selected = i < this.sectionNames.Count && this.sectionNames[i] == this.selectedSection;
+                ReplayUiTools.SetSidebarButtonSelected(this.sectionButtons[i], selected);
+            }
+        }
+
+        private void ToggleManager()
+        {
+            if (this.isManagerVisible)
+            {
+                this.HideManager();
+                return;
+            }
+
+            this.ShowManager();
+        }
+
+        private void ShowManager()
+        {
+            if (this.managerPanel == null)
+            {
+                return;
+            }
+
+            this.isManagerVisible = true;
+            this.managerPanel.style.display = DisplayStyle.Flex;
+            this.root.pickingMode = PickingMode.Ignore;
+            this.managerPanel.pickingMode = PickingMode.Position;
+            this.ShowSection(this.selectedSection);
 
             try
             {
-                this.playback.Play(filePath);
-                this.RefreshPlaybackStatus();
-                this.HideLibrary();
+                GlobalStateManager.SetUIState(new Dictionary<string, object>
+                {
+                    { "isMouseRequired", true }
+                });
             }
-            catch (Exception exception)
+            catch (Exception)
             {
-                ReplayModLog.Warning("Failed to play replay " + filePath + ": " + exception.Message);
             }
         }
 
-        private void RefreshPlaybackStatus()
+        private void TickReplayLibraryIndex()
         {
-            this.RefreshTimelineIndicator();
-            if (this.playbackLabel == null)
+            if (!this.isManagerVisible || this.ReplayList == null || this.reader == null || this.storage == null)
             {
                 return;
             }
 
-            if (this.playback.IsPlaying)
+            float realtime = Time.realtimeSinceStartup;
+            if (realtime < this.nextReplayIndexRealtime)
             {
-                this.playbackLabel.text = "Playback: " + this.playback.PlaybackMode + "  " + this.playback.CurrentTick + " / " + this.playback.TotalTicks;
                 return;
             }
 
-            this.playbackLabel.text = "Playback: idle";
+            this.nextReplayIndexRealtime = realtime + 0.2f;
+            if (this.reader.IndexNextMissingSummary(this.storage.ReplaysDirectory, this.storage.SummariesDirectory, 12))
+            {
+                this.RefreshReplayList();
+            }
         }
 
-        private void RefreshTimelineIndicator()
+        private void HideManager()
         {
-            if (this.timelineLabel == null)
+            if (this.managerPanel == null)
             {
                 return;
             }
 
-            if (!this.playback.IsPlaying)
-            {
-                this.timelineLabel.style.display = DisplayStyle.None;
-                return;
-            }
+            this.isManagerVisible = false;
+            this.managerPanel.style.display = DisplayStyle.None;
+            this.root.pickingMode = PickingMode.Ignore;
+            this.managerPanel.pickingMode = PickingMode.Ignore;
+        }
 
-            int currentTick = Math.Max(0, this.playback.CurrentTick);
-            int totalTicks = Math.Max(currentTick, this.playback.TotalTicks);
-            this.timelineLabel.text = "REPLAY  " + this.FormatPlaybackTime(currentTick) + " / " + this.FormatPlaybackTime(totalTicks);
-            this.timelineLabel.style.display = DisplayStyle.Flex;
+        private void Event_HideManager(Dictionary<string, object> message)
+        {
+            this.HideManager();
+            this.SyncMainMenuVisibilityFromUi();
+            this.RefreshStatusIndicator();
+        }
+
+        private void Event_OnMainMenuShow(Dictionary<string, object> message)
+        {
+            this.isMainMenuVisible = true;
+            this.RefreshStatusIndicator();
+        }
+
+        private void Event_OnMainMenuHide(Dictionary<string, object> message)
+        {
+            this.isMainMenuVisible = false;
+            this.HideManager();
+            this.RefreshStatusIndicator();
+        }
+
+        private void SyncMainMenuVisibilityFromUi()
+        {
+            UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
+            this.isMainMenuVisible = uiManager == null || uiManager.MainMenu == null || uiManager.MainMenu.IsVisible;
         }
 
         private string FormatPlaybackTime(int tick)
@@ -512,31 +702,6 @@ namespace PuckReplayMod
             }
 
             return string.Format("{0:D2}:{1:D2}", timeSpan.Minutes, timeSpan.Seconds);
-        }
-
-        private void RefreshStatusIndicator()
-        {
-            if (this.statusLabel == null)
-            {
-                return;
-            }
-
-            if (this.recorder.IsRecording)
-            {
-                this.statusLabel.text = "REPLAY MOD  REC  " + this.recorder.CurrentTick;
-                this.statusLabel.style.backgroundColor = new Color(0.55f, 0.05f, 0.06f, 0.9f);
-                return;
-            }
-
-            if (this.recorder.IsRecordingSuppressed)
-            {
-                this.statusLabel.text = "REPLAY MOD  PLAYBACK";
-                this.statusLabel.style.backgroundColor = new Color(0.1f, 0.18f, 0.32f, 0.9f);
-                return;
-            }
-
-            this.statusLabel.text = "REPLAY MOD  READY";
-            this.statusLabel.style.backgroundColor = new Color(0.05f, 0.05f, 0.05f, 0.72f);
         }
     }
 }
