@@ -11,7 +11,11 @@ namespace PuckReplayMod
 
         public ReplayStorageService Storage { get; private set; }
 
+        public ReplayFileReader Reader { get; private set; }
+
         public ClientReplayRecorder Recorder { get; private set; }
+
+        public ReplayPlaybackService Playback { get; private set; }
 
         public ReplayModUiService Ui { get; private set; }
 
@@ -60,10 +64,13 @@ namespace PuckReplayMod
             this.Settings = ReplayModSettings.Load();
             this.Storage = new ReplayStorageService();
             this.Storage.Initialize();
+            this.Reader = new ReplayFileReader();
             this.Recorder = new ClientReplayRecorder(this.Settings, this.Storage);
             this.Recorder.Initialize();
-            this.Ui = new ReplayModUiService(this.Settings, this.Recorder, this.Storage);
+            this.Playback = new ReplayPlaybackService(this.Reader, this.Recorder);
+            this.Ui = new ReplayModUiService(this.Settings, this.Recorder, this.Storage, this.Reader, this.Playback);
             this.Ui.Initialize();
+            EventManager.AddEventListener("Event_OnClientStopped", this.Event_OnClientStopped);
         }
 
         private void Update()
@@ -101,7 +108,23 @@ namespace PuckReplayMod
                 }
             }
 
-            this.TrackJoinFrameProfile();
+            if (this.Playback != null)
+            {
+                try
+                {
+                    this.Playback.Tick(Time.unscaledDeltaTime);
+                }
+                catch (Exception exception)
+                {
+                    ReplayModLog.Error("Playback update failed: " + exception);
+                    this.Playback.Close();
+                }
+            }
+
+            if (this.Settings != null && this.Settings.EnableDebugProfiling)
+            {
+                this.TrackJoinFrameProfile();
+            }
         }
 
         private void TrackJoinFrameProfile()
@@ -158,6 +181,8 @@ namespace PuckReplayMod
 
         private void OnDestroy()
         {
+            EventManager.RemoveEventListener("Event_OnClientStopped", this.Event_OnClientStopped);
+
             if (this.Ui != null)
             {
                 this.Ui.Dispose();
@@ -169,6 +194,14 @@ namespace PuckReplayMod
                 this.Recorder.Dispose();
                 this.Recorder = null;
             }
+
+            if (this.Playback != null)
+            {
+                this.Playback.Close();
+                this.Playback = null;
+            }
+
+            this.Reader = null;
 
             if (this.Settings != null)
             {
@@ -202,6 +235,15 @@ namespace PuckReplayMod
             if (this.Ui != null)
             {
                 this.Ui.AttachPauseMenuButton(root);
+            }
+        }
+
+        private void Event_OnClientStopped(System.Collections.Generic.Dictionary<string, object> message)
+        {
+            if (this.Playback != null && this.Playback.IsPlaybackActive)
+            {
+                ReplayModLog.Info("Client stopped during replay playback; closing playback.");
+                this.Playback.Close();
             }
         }
     }

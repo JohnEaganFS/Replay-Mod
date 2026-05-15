@@ -19,6 +19,7 @@ namespace PuckReplayMod
         private float lastRealtime;
         private int currentTick;
         private bool initialized;
+        private bool isRecordingSuppressed;
         private bool startRequested;
         private bool scoreboardSnapshotRequested;
         private bool firstTickLogged;
@@ -52,6 +53,11 @@ namespace PuckReplayMod
         public int CurrentTick
         {
             get { return this.currentTick; }
+        }
+
+        public bool IsRecordingSuppressed
+        {
+            get { return this.isRecordingSuppressed; }
         }
 
         public void Initialize()
@@ -108,9 +114,12 @@ namespace PuckReplayMod
                 this.tickAccumulator -= tickInterval;
                 try
                 {
-                    long captureStartTicks = Stopwatch.GetTimestamp();
+                    long captureStartTicks = this.settings.EnableDebugProfiling ? Stopwatch.GetTimestamp() : 0L;
                     this.RecordTransformFrame();
-                    this.TrackCaptureProfile(Stopwatch.GetTimestamp() - captureStartTicks, realtime);
+                    if (this.settings.EnableDebugProfiling)
+                    {
+                        this.TrackCaptureProfile(Stopwatch.GetTimestamp() - captureStartTicks, realtime);
+                    }
                 }
                 catch (Exception exception)
                 {
@@ -162,7 +171,7 @@ namespace PuckReplayMod
 
         public void StartRecording(string reason)
         {
-            if (this.IsRecording || !this.settings.AutoRecord)
+            if (this.IsRecording || !this.settings.AutoRecord || this.isRecordingSuppressed)
             {
                 return;
             }
@@ -175,7 +184,10 @@ namespace PuckReplayMod
             this.stalledTickWarningLogged = false;
             this.transformCaptureFailureLogged = false;
             this.scoreboardCaptureFailureLogged = false;
-            this.ResetCaptureProfile(this.recordingStartedRealtime);
+            if (this.settings.EnableDebugProfiling)
+            {
+                this.ResetCaptureProfile(this.recordingStartedRealtime);
+            }
             this.currentSession = new ReplaySessionData();
             this.currentSession.Header.StartedUtcTicks = DateTime.UtcNow.Ticks;
             this.currentSession.Header.TickRate = Mathf.Max(1, this.settings.CaptureTickRate);
@@ -239,6 +251,29 @@ namespace PuckReplayMod
             ReplayModLog.Info("Marker added at tick " + this.currentTick + ".");
         }
 
+        public void SetRecordingSuppressed(bool isSuppressed, string reason)
+        {
+            if (this.isRecordingSuppressed == isSuppressed)
+            {
+                return;
+            }
+
+            this.isRecordingSuppressed = isSuppressed;
+            this.startRequested = false;
+            this.startReason = null;
+            if (isSuppressed && this.IsRecording)
+            {
+                this.StopRecording(false, reason);
+            }
+
+            ReplayModLog.Info("Recording " + (isSuppressed ? "suppressed" : "unsuppressed") + " (" + reason + ").");
+            Action recordingStateChanged = this.RecordingStateChanged;
+            if (recordingStateChanged != null)
+            {
+                recordingStateChanged();
+            }
+        }
+
         private void Subscribe()
         {
             EventManager.AddEventListener("Event_OnClientStopped", this.Event_OnClientStopped);
@@ -246,6 +281,8 @@ namespace PuckReplayMod
             EventManager.AddEventListener("Event_Everyone_OnPlayerSpawned", this.Event_Everyone_OnPlayerSpawned);
             EventManager.AddEventListener("Event_Everyone_OnPlayerDespawned", this.Event_Everyone_OnPlayerDespawned);
             EventManager.AddEventListener("Event_Everyone_OnPlayerGameStateChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerCustomizationStateChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerHandednessChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.AddEventListener("Event_Everyone_OnPlayerUsernameChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.AddEventListener("Event_Everyone_OnPlayerNumberChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.AddEventListener("Event_Everyone_OnPlayerGoalsChanged", this.Event_Everyone_OnPlayerStateChanged);
@@ -269,6 +306,8 @@ namespace PuckReplayMod
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerSpawned", this.Event_Everyone_OnPlayerSpawned);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerDespawned", this.Event_Everyone_OnPlayerDespawned);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerGameStateChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerCustomizationStateChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerHandednessChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerUsernameChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerNumberChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerGoalsChanged", this.Event_Everyone_OnPlayerStateChanged);
@@ -472,6 +511,11 @@ namespace PuckReplayMod
 
         private bool EnsureRecording(string reason)
         {
+            if (this.isRecordingSuppressed)
+            {
+                return false;
+            }
+
             if (this.IsRecording)
             {
                 return true;
@@ -575,6 +619,16 @@ namespace PuckReplayMod
                     }
 
                     snapshot.Players.Add(this.BuildPlayerSnapshot(player));
+                    if (player.PlayerBody)
+                    {
+                        snapshot.PlayerBodies.Add(new BodyLifecyclePayload
+                        {
+                            OwnerClientId = player.OwnerClientId,
+                            Position = Vector3Dto.From(player.PlayerBody.transform.position),
+                            Rotation = QuaternionDto.From(player.PlayerBody.transform.rotation)
+                        });
+                    }
+
                     if (player.Stick)
                     {
                         snapshot.Sticks.Add(new StickSnapshotPayload
@@ -627,8 +681,40 @@ namespace PuckReplayMod
                 Phase = player.Phase.ToString(),
                 Team = player.Team.ToString(),
                 Role = player.Role.ToString(),
+                Handedness = player.Handedness.Value.ToString(),
                 PositionName = positionName,
-                IsMuted = player.IsMuted.Value
+                IsMuted = player.IsMuted.Value,
+                Customization = BuildCustomizationSnapshot(player.CustomizationState.Value)
+            };
+        }
+
+        private static PlayerCustomizationPayload BuildCustomizationSnapshot(PlayerCustomizationState state)
+        {
+            return new PlayerCustomizationPayload
+            {
+                FlagID = state.FlagID,
+                HeadgearIDBlueAttacker = state.HeadgearIDBlueAttacker,
+                HeadgearIDRedAttacker = state.HeadgearIDRedAttacker,
+                HeadgearIDBlueGoalie = state.HeadgearIDBlueGoalie,
+                HeadgearIDRedGoalie = state.HeadgearIDRedGoalie,
+                MustacheID = state.MustacheID,
+                BeardID = state.BeardID,
+                JerseyIDBlueAttacker = state.JerseyIDBlueAttacker,
+                JerseyIDRedAttacker = state.JerseyIDRedAttacker,
+                JerseyIDBlueGoalie = state.JerseyIDBlueGoalie,
+                JerseyIDRedGoalie = state.JerseyIDRedGoalie,
+                StickSkinIDBlueAttacker = state.StickSkinIDBlueAttacker,
+                StickSkinIDRedAttacker = state.StickSkinIDRedAttacker,
+                StickSkinIDBlueGoalie = state.StickSkinIDBlueGoalie,
+                StickSkinIDRedGoalie = state.StickSkinIDRedGoalie,
+                StickShaftTapeIDBlueAttacker = state.StickShaftTapeIDBlueAttacker,
+                StickShaftTapeIDRedAttacker = state.StickShaftTapeIDRedAttacker,
+                StickShaftTapeIDBlueGoalie = state.StickShaftTapeIDBlueGoalie,
+                StickShaftTapeIDRedGoalie = state.StickShaftTapeIDRedGoalie,
+                StickBladeTapeIDBlueAttacker = state.StickBladeTapeIDBlueAttacker,
+                StickBladeTapeIDRedAttacker = state.StickBladeTapeIDRedAttacker,
+                StickBladeTapeIDBlueGoalie = state.StickBladeTapeIDBlueGoalie,
+                StickBladeTapeIDRedGoalie = state.StickBladeTapeIDRedGoalie
             };
         }
 

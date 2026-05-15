@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
 using UnityEngine.UIElements;
@@ -10,20 +11,27 @@ namespace PuckReplayMod
         private readonly ReplayModSettings settings;
         private readonly ClientReplayRecorder recorder;
         private readonly ReplayStorageService storage;
+        private readonly ReplayFileReader reader;
+        private readonly ReplayPlaybackService playback;
 
         private VisualElement root;
         private VisualElement libraryPanel;
+        private VisualElement replayList;
         private Label statusLabel;
+        private Label timelineLabel;
         private Label storageLabel;
+        private Label playbackLabel;
         private bool isLibraryVisible;
         private bool mainMenuButtonAttached;
         private bool pauseMenuButtonAttached;
 
-        public ReplayModUiService(ReplayModSettings settings, ClientReplayRecorder recorder, ReplayStorageService storage)
+        public ReplayModUiService(ReplayModSettings settings, ClientReplayRecorder recorder, ReplayStorageService storage, ReplayFileReader reader, ReplayPlaybackService playback)
         {
             this.settings = settings;
             this.recorder = recorder;
             this.storage = storage;
+            this.reader = reader;
+            this.playback = playback;
             this.recorder.RecordingStateChanged += this.RefreshStatusIndicator;
             this.recorder.TickAdvanced += this.RefreshStatusIndicator;
         }
@@ -60,8 +68,11 @@ namespace PuckReplayMod
 
             this.root = null;
             this.libraryPanel = null;
+            this.replayList = null;
             this.statusLabel = null;
+            this.timelineLabel = null;
             this.storageLabel = null;
+            this.playbackLabel = null;
             this.mainMenuButtonAttached = false;
             this.pauseMenuButtonAttached = false;
         }
@@ -69,6 +80,7 @@ namespace PuckReplayMod
         public void Tick()
         {
             this.RefreshStatusIndicator();
+            this.RefreshPlaybackStatus();
         }
 
         public void TryAttachToExistingUi()
@@ -95,8 +107,11 @@ namespace PuckReplayMod
             {
                 this.root = null;
                 this.libraryPanel = null;
+                this.replayList = null;
                 this.statusLabel = null;
+                this.timelineLabel = null;
                 this.storageLabel = null;
+                this.playbackLabel = null;
                 this.isLibraryVisible = false;
                 this.mainMenuButtonAttached = false;
                 this.pauseMenuButtonAttached = false;
@@ -119,9 +134,11 @@ namespace PuckReplayMod
             this.root.pickingMode = PickingMode.Ignore;
 
             this.CreateStatusIndicator();
+            this.CreateTimelineIndicator();
             this.CreateLibraryPanel();
             uiManager.RootVisualElement.Add(this.root);
             this.RefreshStatusIndicator();
+            this.RefreshTimelineIndicator();
         }
 
         public void AttachMainMenuButton(VisualElement rootVisualElement)
@@ -175,10 +192,6 @@ namespace PuckReplayMod
 
         private void MatchMenuButtonStyle(Button referenceButton, Button button)
         {
-            button.style.height = 36f;
-            button.style.marginTop = 4f;
-            button.style.marginBottom = 4f;
-
             if (referenceButton == null)
             {
                 return;
@@ -197,20 +210,19 @@ namespace PuckReplayMod
             if (!float.IsNaN(referenceButton.resolvedStyle.height) && referenceButton.resolvedStyle.height > 0f)
             {
                 button.style.height = referenceButton.resolvedStyle.height;
+                button.style.marginLeft = referenceButton.resolvedStyle.marginLeft;
+                button.style.marginRight = referenceButton.resolvedStyle.marginRight;
+                button.style.marginTop = referenceButton.resolvedStyle.marginTop;
+                button.style.marginBottom = referenceButton.resolvedStyle.marginBottom;
+                button.style.paddingLeft = referenceButton.resolvedStyle.paddingLeft;
+                button.style.paddingRight = referenceButton.resolvedStyle.paddingRight;
+                button.style.paddingTop = referenceButton.resolvedStyle.paddingTop;
+                button.style.paddingBottom = referenceButton.resolvedStyle.paddingBottom;
             }
 
-            button.style.marginLeft = referenceButton.resolvedStyle.marginLeft;
-            button.style.marginRight = referenceButton.resolvedStyle.marginRight;
-            button.style.marginTop = referenceButton.resolvedStyle.marginTop;
-            button.style.marginBottom = referenceButton.resolvedStyle.marginBottom;
-            button.style.paddingLeft = referenceButton.resolvedStyle.paddingLeft;
-            button.style.paddingRight = referenceButton.resolvedStyle.paddingRight;
-            button.style.paddingTop = referenceButton.resolvedStyle.paddingTop;
-            button.style.paddingBottom = referenceButton.resolvedStyle.paddingBottom;
-            button.style.backgroundColor = referenceButton.resolvedStyle.backgroundColor;
-            button.style.color = referenceButton.resolvedStyle.color;
             button.style.fontSize = referenceButton.resolvedStyle.fontSize;
             button.style.unityTextAlign = referenceButton.resolvedStyle.unityTextAlign;
+            button.style.unityFontStyleAndWeight = referenceButton.resolvedStyle.unityFontStyleAndWeight;
         }
 
         private void CreateStatusIndicator()
@@ -232,6 +244,27 @@ namespace PuckReplayMod
             this.statusLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
             this.statusLabel.pickingMode = PickingMode.Ignore;
             this.root.Add(this.statusLabel);
+        }
+
+        private void CreateTimelineIndicator()
+        {
+            this.timelineLabel = new Label
+            {
+                name = "PuckReplayModTimeline"
+            };
+            this.timelineLabel.style.position = Position.Absolute;
+            this.timelineLabel.style.right = 18f;
+            this.timelineLabel.style.top = 52f;
+            this.timelineLabel.style.paddingLeft = 8f;
+            this.timelineLabel.style.paddingRight = 8f;
+            this.timelineLabel.style.paddingTop = 4f;
+            this.timelineLabel.style.paddingBottom = 4f;
+            this.timelineLabel.style.backgroundColor = new Color(0.04f, 0.06f, 0.08f, 0.78f);
+            this.timelineLabel.style.color = Color.white;
+            this.timelineLabel.style.fontSize = 12f;
+            this.timelineLabel.style.display = DisplayStyle.None;
+            this.timelineLabel.pickingMode = PickingMode.Ignore;
+            this.root.Add(this.timelineLabel);
         }
 
         private void CreateLibraryPanel()
@@ -265,6 +298,19 @@ namespace PuckReplayMod
             this.storageLabel.style.whiteSpace = WhiteSpace.Normal;
             this.libraryPanel.Add(this.storageLabel);
 
+            this.playbackLabel = new Label();
+            this.playbackLabel.style.marginTop = 8f;
+            this.playbackLabel.style.color = new Color(0.76f, 0.82f, 0.88f, 1f);
+            this.playbackLabel.style.whiteSpace = WhiteSpace.Normal;
+            this.libraryPanel.Add(this.playbackLabel);
+
+            this.replayList = new VisualElement
+            {
+                name = "PuckReplayModReplayList"
+            };
+            this.replayList.style.marginTop = 10f;
+            this.libraryPanel.Add(this.replayList);
+
             Button markerButton = new Button(delegate
             {
                 this.recorder.AddMarker();
@@ -275,6 +321,18 @@ namespace PuckReplayMod
             markerButton.style.marginTop = 12f;
             markerButton.style.height = 34f;
             this.libraryPanel.Add(markerButton);
+
+            Button stopPlaybackButton = new Button(delegate
+            {
+                this.playback.Close();
+                this.RefreshPlaybackStatus();
+            })
+            {
+                text = "CLOSE PLAYBACK"
+            };
+            stopPlaybackButton.style.marginTop = 8f;
+            stopPlaybackButton.style.height = 34f;
+            this.libraryPanel.Add(stopPlaybackButton);
 
             Button closeButton = new Button(this.HideLibrary)
             {
@@ -310,6 +368,8 @@ namespace PuckReplayMod
             this.root.pickingMode = PickingMode.Ignore;
             this.libraryPanel.pickingMode = PickingMode.Position;
             this.RefreshLibraryText();
+            this.RefreshReplayList();
+            this.RefreshPlaybackStatus();
         }
 
         private void HideLibrary()
@@ -346,6 +406,114 @@ namespace PuckReplayMod
             this.storageLabel.text = "Stored replays: " + replayCount + "\nFolder: " + this.storage.ReplaysDirectory + "\nCapture: " + this.settings.CaptureTickRate + " ticks/sec";
         }
 
+        private void RefreshReplayList()
+        {
+            if (this.replayList == null)
+            {
+                return;
+            }
+
+            this.replayList.Clear();
+            List<ReplayFileSummary> replays = this.reader.GetRecentReplays(this.storage.ReplaysDirectory, 6);
+            if (replays.Count == 0)
+            {
+                Label emptyLabel = new Label("No replays found.");
+                emptyLabel.style.color = new Color(0.76f, 0.82f, 0.88f, 1f);
+                this.replayList.Add(emptyLabel);
+                return;
+            }
+
+            foreach (ReplayFileSummary replay in replays)
+            {
+                ReplayFileSummary selectedReplay = replay;
+                Button replayButton = new Button(delegate
+                {
+                    this.PlayReplay(selectedReplay.FilePath);
+                })
+                {
+                    text = this.FormatReplayButtonText(selectedReplay)
+                };
+                replayButton.style.height = 34f;
+                replayButton.style.marginTop = 4f;
+                this.replayList.Add(replayButton);
+            }
+        }
+
+        private string FormatReplayButtonText(ReplayFileSummary replay)
+        {
+            return "PLAY  " + replay.LastWriteUtc.ToLocalTime().ToString("MM/dd HH:mm") +
+                "  " + replay.DurationSeconds.ToString("0") + "s  " +
+                replay.ServerName;
+        }
+
+        private void PlayReplay(string filePath)
+        {
+            if (this.recorder.IsRecording)
+            {
+                ReplayModLog.Warning("Cannot start replay playback while recording a live session.");
+                return;
+            }
+
+            try
+            {
+                this.playback.Play(filePath);
+                this.RefreshPlaybackStatus();
+                this.HideLibrary();
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Failed to play replay " + filePath + ": " + exception.Message);
+            }
+        }
+
+        private void RefreshPlaybackStatus()
+        {
+            this.RefreshTimelineIndicator();
+            if (this.playbackLabel == null)
+            {
+                return;
+            }
+
+            if (this.playback.IsPlaying)
+            {
+                this.playbackLabel.text = "Playback: " + this.playback.PlaybackMode + "  " + this.playback.CurrentTick + " / " + this.playback.TotalTicks;
+                return;
+            }
+
+            this.playbackLabel.text = "Playback: idle";
+        }
+
+        private void RefreshTimelineIndicator()
+        {
+            if (this.timelineLabel == null)
+            {
+                return;
+            }
+
+            if (!this.playback.IsPlaying)
+            {
+                this.timelineLabel.style.display = DisplayStyle.None;
+                return;
+            }
+
+            int currentTick = Math.Max(0, this.playback.CurrentTick);
+            int totalTicks = Math.Max(currentTick, this.playback.TotalTicks);
+            this.timelineLabel.text = "REPLAY  " + this.FormatPlaybackTime(currentTick) + " / " + this.FormatPlaybackTime(totalTicks);
+            this.timelineLabel.style.display = DisplayStyle.Flex;
+        }
+
+        private string FormatPlaybackTime(int tick)
+        {
+            int tickRate = Math.Max(1, this.playback.TickRate);
+            TimeSpan timeSpan = TimeSpan.FromSeconds((double)tick / tickRate);
+            if (timeSpan.TotalHours >= 1.0)
+            {
+                return string.Format("{0:D2}:{1:D2}:{2:D2}", (int)timeSpan.TotalHours, timeSpan.Minutes, timeSpan.Seconds);
+            }
+
+            return string.Format("{0:D2}:{1:D2}", timeSpan.Minutes, timeSpan.Seconds);
+        }
+
         private void RefreshStatusIndicator()
         {
             if (this.statusLabel == null)
@@ -357,6 +525,13 @@ namespace PuckReplayMod
             {
                 this.statusLabel.text = "REPLAY MOD  REC  " + this.recorder.CurrentTick;
                 this.statusLabel.style.backgroundColor = new Color(0.55f, 0.05f, 0.06f, 0.9f);
+                return;
+            }
+
+            if (this.recorder.IsRecordingSuppressed)
+            {
+                this.statusLabel.text = "REPLAY MOD  PLAYBACK";
+                this.statusLabel.style.backgroundColor = new Color(0.1f, 0.18f, 0.32f, 0.9f);
                 return;
             }
 

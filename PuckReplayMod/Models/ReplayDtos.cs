@@ -140,8 +140,38 @@ namespace PuckReplayMod
         public string Phase;
         public string Team;
         public string Role;
+        public string Handedness;
         public string PositionName;
         public bool IsMuted;
+        public PlayerCustomizationPayload Customization;
+    }
+
+    [Serializable]
+    public class PlayerCustomizationPayload
+    {
+        public int FlagID;
+        public int HeadgearIDBlueAttacker;
+        public int HeadgearIDRedAttacker;
+        public int HeadgearIDBlueGoalie;
+        public int HeadgearIDRedGoalie;
+        public int MustacheID;
+        public int BeardID;
+        public int JerseyIDBlueAttacker;
+        public int JerseyIDRedAttacker;
+        public int JerseyIDBlueGoalie;
+        public int JerseyIDRedGoalie;
+        public int StickSkinIDBlueAttacker;
+        public int StickSkinIDRedAttacker;
+        public int StickSkinIDBlueGoalie;
+        public int StickSkinIDRedGoalie;
+        public int StickShaftTapeIDBlueAttacker;
+        public int StickShaftTapeIDRedAttacker;
+        public int StickShaftTapeIDBlueGoalie;
+        public int StickShaftTapeIDRedGoalie;
+        public int StickBladeTapeIDBlueAttacker;
+        public int StickBladeTapeIDRedAttacker;
+        public int StickBladeTapeIDBlueGoalie;
+        public int StickBladeTapeIDRedGoalie;
     }
 
     [Serializable]
@@ -165,6 +195,7 @@ namespace PuckReplayMod
     {
         public GameStatePayload GameState;
         public List<PlayerSnapshotPayload> Players = new List<PlayerSnapshotPayload>();
+        public List<BodyLifecyclePayload> PlayerBodies = new List<BodyLifecyclePayload>();
         public List<PuckSnapshotPayload> Pucks = new List<PuckSnapshotPayload>();
         public List<StickSnapshotPayload> Sticks = new List<StickSnapshotPayload>();
 
@@ -175,6 +206,7 @@ namespace PuckReplayMod
         public InitialSnapshotPayload(int playerCapacity, int puckCapacity, int stickCapacity)
         {
             this.Players = new List<PlayerSnapshotPayload>(playerCapacity);
+            this.PlayerBodies = new List<BodyLifecyclePayload>(playerCapacity);
             this.Pucks = new List<PuckSnapshotPayload>(puckCapacity);
             this.Sticks = new List<StickSnapshotPayload>(stickCapacity);
         }
