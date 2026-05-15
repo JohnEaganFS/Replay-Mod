@@ -1,0 +1,920 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using Newtonsoft.Json;
+using UnityEngine;
+using UnityEngine.InputSystem;
+
+namespace PuckReplayMod
+{
+    public class ClientReplayRecorder
+    {
+        private readonly ReplayModSettings settings;
+        private readonly ReplayStorageService storage;
+        private readonly List<Player> activeBodyPlayers = new List<Player>(16);
+        private readonly List<Puck> activePucks = new List<Puck>(16);
+
+        private ReplaySessionData currentSession;
+        private float tickAccumulator;
+        private float lastRealtime;
+        private int currentTick;
+        private bool initialized;
+        private bool startRequested;
+        private bool scoreboardSnapshotRequested;
+        private bool firstTickLogged;
+        private bool stalledTickWarningLogged;
+        private bool transformCaptureFailureLogged;
+        private bool scoreboardCaptureFailureLogged;
+        private bool markerInputFailureLogged;
+        private float recordingStartedRealtime;
+        private float nextCaptureProfileRealtime;
+        private float captureProfileEndRealtime;
+        private long captureProfileTotalTicks;
+        private long captureProfileMaxTicks;
+        private int captureProfileFrames;
+        private string startReason;
+
+        public ClientReplayRecorder(ReplayModSettings settings, ReplayStorageService storage)
+        {
+            this.settings = settings;
+            this.storage = storage;
+        }
+
+        public event Action RecordingStateChanged;
+
+        public event Action TickAdvanced;
+
+        public bool IsRecording
+        {
+            get { return this.currentSession != null; }
+        }
+
+        public int CurrentTick
+        {
+            get { return this.currentTick; }
+        }
+
+        public void Initialize()
+        {
+            if (this.initialized)
+            {
+                return;
+            }
+
+            this.initialized = true;
+            this.Subscribe();
+        }
+
+        public void Dispose()
+        {
+            this.Unsubscribe();
+            this.StopRecording(true, "mod disabled");
+            this.initialized = false;
+        }
+
+        public void Tick(float deltaTime)
+        {
+            if (this.startRequested && !this.IsRecording)
+            {
+                string reason = string.IsNullOrEmpty(this.startReason) ? "gameplay observed" : this.startReason;
+                this.startRequested = false;
+                this.startReason = null;
+                this.StartRecording(reason);
+            }
+
+            if (this.settings.AutoRecord && this.IsMarkerKeyPressed())
+            {
+                this.AddMarker();
+            }
+
+            if (!this.IsRecording)
+            {
+                this.lastRealtime = Time.realtimeSinceStartup;
+                return;
+            }
+
+            float realtime = Time.realtimeSinceStartup;
+            if (this.lastRealtime <= 0f)
+            {
+                this.lastRealtime = realtime;
+            }
+
+            deltaTime = Mathf.Max(0f, realtime - this.lastRealtime);
+            this.lastRealtime = realtime;
+            float tickInterval = 1f / Mathf.Max(1, this.settings.CaptureTickRate);
+            this.tickAccumulator += deltaTime;
+            while (this.tickAccumulator >= tickInterval)
+            {
+                this.tickAccumulator -= tickInterval;
+                try
+                {
+                    long captureStartTicks = Stopwatch.GetTimestamp();
+                    this.RecordTransformFrame();
+                    this.TrackCaptureProfile(Stopwatch.GetTimestamp() - captureStartTicks, realtime);
+                }
+                catch (Exception exception)
+                {
+                    if (!this.transformCaptureFailureLogged)
+                    {
+                        this.transformCaptureFailureLogged = true;
+                        ReplayModLog.Warning("Transform frame capture failed: " + exception);
+                    }
+                }
+
+                if (this.scoreboardSnapshotRequested)
+                {
+                    try
+                    {
+                        this.RecordScoreboardSnapshot();
+                    }
+                    catch (Exception exception)
+                    {
+                        if (!this.scoreboardCaptureFailureLogged)
+                        {
+                            this.scoreboardCaptureFailureLogged = true;
+                            ReplayModLog.Warning("Scoreboard snapshot capture failed: " + exception);
+                        }
+                    }
+
+                    this.scoreboardSnapshotRequested = false;
+                }
+
+                this.currentTick++;
+                if (!this.firstTickLogged)
+                {
+                    this.firstTickLogged = true;
+                    ReplayModLog.Info("Recording tick stream started.");
+                }
+
+                Action tickAdvanced = this.TickAdvanced;
+                if (tickAdvanced != null)
+                {
+                    tickAdvanced();
+                }
+            }
+
+            if (this.currentTick == 0 && !this.stalledTickWarningLogged && realtime - this.recordingStartedRealtime > 2f)
+            {
+                this.stalledTickWarningLogged = true;
+                ReplayModLog.Warning("Recording is active, but no replay ticks have advanced after two seconds.");
+            }
+        }
+
+        public void StartRecording(string reason)
+        {
+            if (this.IsRecording || !this.settings.AutoRecord)
+            {
+                return;
+            }
+
+            this.currentTick = 0;
+            this.tickAccumulator = 0f;
+            this.lastRealtime = Time.realtimeSinceStartup;
+            this.recordingStartedRealtime = this.lastRealtime;
+            this.firstTickLogged = false;
+            this.stalledTickWarningLogged = false;
+            this.transformCaptureFailureLogged = false;
+            this.scoreboardCaptureFailureLogged = false;
+            this.ResetCaptureProfile(this.recordingStartedRealtime);
+            this.currentSession = new ReplaySessionData();
+            this.currentSession.Header.StartedUtcTicks = DateTime.UtcNow.Ticks;
+            this.currentSession.Header.TickRate = Mathf.Max(1, this.settings.CaptureTickRate);
+            this.currentSession.Header.ServerName = this.GetServerName();
+            this.currentSession.Header.RecordedBy = this.GetRecorderName();
+            this.RebuildActiveObjects();
+
+            this.RecordEvent("InitialSnapshot", this.BuildInitialSnapshot());
+            ReplayModLog.Info("Recording started (" + reason + ").");
+            Action recordingStateChanged = this.RecordingStateChanged;
+            if (recordingStateChanged != null)
+            {
+                recordingStateChanged();
+            }
+        }
+
+        public void StopRecording(bool save, string reason)
+        {
+            if (!this.IsRecording)
+            {
+                this.startRequested = false;
+                this.startReason = null;
+                return;
+            }
+
+            ReplaySessionData session = this.currentSession;
+            this.currentSession = null;
+            this.tickAccumulator = 0f;
+            this.lastRealtime = 0f;
+            session.Header.EndedUtcTicks = DateTime.UtcNow.Ticks;
+            session.Header.TotalTicks = this.currentTick;
+            session.Header.EventCount = session.Events.Count;
+
+            if (save && session.Events.Count > 0)
+            {
+                this.storage.SaveReplay(session);
+                this.storage.CleanupOldReplays(this.settings.StorageLimitMb);
+            }
+
+            this.ClearActiveObjects();
+            ReplayModLog.Info("Recording stopped (" + reason + ").");
+            Action recordingStateChanged = this.RecordingStateChanged;
+            if (recordingStateChanged != null)
+            {
+                recordingStateChanged();
+            }
+        }
+
+        public void AddMarker()
+        {
+            if (!this.IsRecording)
+            {
+                return;
+            }
+
+            this.RecordEvent("Marker", new MarkerPayload
+            {
+                CreatedUtcTicks = DateTime.UtcNow.Ticks
+            });
+            this.currentSession.Header.HasMarkers = true;
+            ReplayModLog.Info("Marker added at tick " + this.currentTick + ".");
+        }
+
+        private void Subscribe()
+        {
+            EventManager.AddEventListener("Event_OnClientStopped", this.Event_OnClientStopped);
+            EventManager.AddEventListener("Event_Everyone_OnGameStateChanged", this.Event_Everyone_OnGameStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerSpawned", this.Event_Everyone_OnPlayerSpawned);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerDespawned", this.Event_Everyone_OnPlayerDespawned);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerGameStateChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerUsernameChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerNumberChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerGoalsChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerAssistsChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerPositionChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerPatreonLevelChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerAdminLevelChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerSteamIdChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerIsMutedChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerBodySpawned", this.Event_Everyone_OnPlayerBodySpawned);
+            EventManager.AddEventListener("Event_Everyone_OnPlayerBodyDespawned", this.Event_Everyone_OnPlayerBodyDespawned);
+            EventManager.AddEventListener("Event_Everyone_OnPuckSpawned", this.Event_Everyone_OnPuckSpawned);
+            EventManager.AddEventListener("Event_Everyone_OnPuckDespawned", this.Event_Everyone_OnPuckDespawned);
+            EventManager.AddEventListener("Event_OnChatMessageAdded", this.Event_OnChatMessageAdded);
+        }
+
+        private void Unsubscribe()
+        {
+            EventManager.RemoveEventListener("Event_OnClientStopped", this.Event_OnClientStopped);
+            EventManager.RemoveEventListener("Event_Everyone_OnGameStateChanged", this.Event_Everyone_OnGameStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerSpawned", this.Event_Everyone_OnPlayerSpawned);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerDespawned", this.Event_Everyone_OnPlayerDespawned);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerGameStateChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerUsernameChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerNumberChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerGoalsChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerAssistsChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerPositionChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerPatreonLevelChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerAdminLevelChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerSteamIdChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerIsMutedChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerBodySpawned", this.Event_Everyone_OnPlayerBodySpawned);
+            EventManager.RemoveEventListener("Event_Everyone_OnPlayerBodyDespawned", this.Event_Everyone_OnPlayerBodyDespawned);
+            EventManager.RemoveEventListener("Event_Everyone_OnPuckSpawned", this.Event_Everyone_OnPuckSpawned);
+            EventManager.RemoveEventListener("Event_Everyone_OnPuckDespawned", this.Event_Everyone_OnPuckDespawned);
+            EventManager.RemoveEventListener("Event_OnChatMessageAdded", this.Event_OnChatMessageAdded);
+        }
+
+        private void Event_OnClientStopped(Dictionary<string, object> message)
+        {
+            this.StopRecording(true, "client stopped");
+            this.ClearActiveObjects();
+        }
+
+        private void Event_Everyone_OnGameStateChanged(Dictionary<string, object> message)
+        {
+            if (!this.EnsureRecording("game state observed"))
+            {
+                return;
+            }
+
+            this.RecordEvent("GameState", this.BuildGameState());
+        }
+
+        private void Event_Everyone_OnPlayerSpawned(Dictionary<string, object> message)
+        {
+            Player player = message["player"] as Player;
+            if (!this.EnsureRecording("player observed"))
+            {
+                return;
+            }
+
+            if (this.ShouldSkipPlayer(player))
+            {
+                return;
+            }
+
+            this.RecordEvent("PlayerSpawned", new PlayerLifecyclePayload
+            {
+                Player = this.BuildPlayerSnapshot(player)
+            });
+            this.RequestScoreboardSnapshot();
+        }
+
+        private void Event_Everyone_OnPlayerDespawned(Dictionary<string, object> message)
+        {
+            Player player = message["player"] as Player;
+            this.RemoveActivePlayer(player);
+            if (this.ShouldSkipPlayer(player))
+            {
+                return;
+            }
+
+            this.RecordEvent("PlayerDespawned", new PlayerLifecyclePayload
+            {
+                Player = this.BuildPlayerSnapshot(player)
+            });
+            this.RequestScoreboardSnapshot();
+        }
+
+        private void Event_Everyone_OnPlayerStateChanged(Dictionary<string, object> message)
+        {
+            Player player = message["player"] as Player;
+            if (this.ShouldSkipPlayer(player))
+            {
+                return;
+            }
+
+            if (!this.EnsureRecording("player state observed"))
+            {
+                return;
+            }
+
+            this.RecordEvent("PlayerState", this.BuildPlayerSnapshot(player));
+            this.RequestScoreboardSnapshot();
+        }
+
+        private void Event_Everyone_OnPlayerBodySpawned(Dictionary<string, object> message)
+        {
+            PlayerBody playerBody = message["playerBody"] as PlayerBody;
+            if (!this.ShouldSkipPlayerBody(playerBody))
+            {
+                this.AddActivePlayer(playerBody.Player);
+            }
+
+            if (!this.EnsureRecording("player body observed"))
+            {
+                return;
+            }
+
+            if (this.ShouldSkipPlayerBody(playerBody))
+            {
+                return;
+            }
+
+            this.RecordEvent("PlayerBodySpawned", new BodyLifecyclePayload
+            {
+                OwnerClientId = playerBody.OwnerClientId,
+                Position = Vector3Dto.From(playerBody.transform.position),
+                Rotation = QuaternionDto.From(playerBody.transform.rotation)
+            });
+        }
+
+        private void Event_Everyone_OnPlayerBodyDespawned(Dictionary<string, object> message)
+        {
+            PlayerBody playerBody = message["playerBody"] as PlayerBody;
+            if (playerBody != null)
+            {
+                this.RemoveActivePlayer(playerBody.Player);
+            }
+
+            if (this.ShouldSkipPlayerBody(playerBody))
+            {
+                return;
+            }
+
+            this.RecordEvent("PlayerBodyDespawned", new BodyLifecyclePayload
+            {
+                OwnerClientId = playerBody.OwnerClientId,
+                Position = Vector3Dto.From(playerBody.transform.position),
+                Rotation = QuaternionDto.From(playerBody.transform.rotation)
+            });
+        }
+
+        private void Event_Everyone_OnPuckSpawned(Dictionary<string, object> message)
+        {
+            Puck puck = message["puck"] as Puck;
+            if (!this.ShouldSkipPuck(puck))
+            {
+                this.AddActivePuck(puck);
+            }
+
+            if (!this.EnsureRecording("puck observed"))
+            {
+                return;
+            }
+
+            if (this.ShouldSkipPuck(puck))
+            {
+                return;
+            }
+
+            this.RecordEvent("PuckSpawned", new PuckLifecyclePayload
+            {
+                NetworkObjectId = puck.NetworkObjectId,
+                Position = Vector3Dto.From(puck.transform.position),
+                Rotation = QuaternionDto.From(puck.transform.rotation)
+            });
+        }
+
+        private void Event_Everyone_OnPuckDespawned(Dictionary<string, object> message)
+        {
+            Puck puck = message["puck"] as Puck;
+            this.RemoveActivePuck(puck);
+            if (this.ShouldSkipPuck(puck))
+            {
+                return;
+            }
+
+            this.RecordEvent("PuckDespawned", new PuckLifecyclePayload
+            {
+                NetworkObjectId = puck.NetworkObjectId,
+                Position = Vector3Dto.From(puck.transform.position),
+                Rotation = QuaternionDto.From(puck.transform.rotation)
+            });
+        }
+
+        private void Event_OnChatMessageAdded(Dictionary<string, object> message)
+        {
+            if (!this.EnsureRecording("chat observed"))
+            {
+                return;
+            }
+
+            ChatMessage chatMessage = message["chatMessage"] as ChatMessage;
+            if (chatMessage == null)
+            {
+                return;
+            }
+
+            this.RecordEvent("ChatMessage", new ChatMessagePayload
+            {
+                SteamId = chatMessage.SteamID.HasValue ? chatMessage.SteamID.Value.ToString() : string.Empty,
+                Username = chatMessage.Username.HasValue ? chatMessage.Username.Value.ToString() : string.Empty,
+                Team = chatMessage.Team.HasValue ? chatMessage.Team.Value.ToString() : string.Empty,
+                Message = chatMessage.Content.ToString(),
+                IsQuickChat = chatMessage.IsQuickChat,
+                IsTeamChat = chatMessage.IsTeamChat,
+                IsSystem = chatMessage.IsSystem
+            });
+            this.currentSession.Header.HasChat = true;
+        }
+
+        private bool EnsureRecording(string reason)
+        {
+            if (this.IsRecording)
+            {
+                return true;
+            }
+
+            if (!this.settings.AutoRecord)
+            {
+                return false;
+            }
+
+            this.startRequested = true;
+            if (string.IsNullOrEmpty(this.startReason))
+            {
+                this.startReason = reason;
+            }
+
+            return false;
+        }
+
+        private void RecordTransformFrame()
+        {
+            TransformFramePayload frame = new TransformFramePayload(this.activeBodyPlayers.Count, this.activeBodyPlayers.Count, this.activePucks.Count);
+            for (int i = this.activeBodyPlayers.Count - 1; i >= 0; i--)
+            {
+                Player player = this.activeBodyPlayers[i];
+                if (this.ShouldSkipPlayer(player))
+                {
+                    this.activeBodyPlayers.RemoveAt(i);
+                    continue;
+                }
+
+                if (!player.PlayerBody)
+                {
+                    continue;
+                }
+
+                PlayerBody playerBody = player.PlayerBody;
+                frame.PlayerBodies.Add(new PlayerBodyTransformPayload
+                {
+                    OwnerClientId = player.OwnerClientId,
+                    Position = Vector3Dto.From(playerBody.transform.position),
+                    Rotation = QuaternionDto.From(playerBody.transform.rotation),
+                    Stamina = playerBody.Stamina.Value,
+                    Speed = playerBody.Speed.Value,
+                    IsSprinting = playerBody.IsSprinting.Value,
+                    IsSliding = playerBody.IsSliding.Value,
+                    IsStopping = playerBody.IsStopping.Value,
+                    IsExtendedLeft = playerBody.IsExtendedLeft.Value,
+                    IsExtendedRight = playerBody.IsExtendedRight.Value
+                });
+
+                if (player.Stick)
+                {
+                    frame.Sticks.Add(new StickTransformPayload
+                    {
+                        OwnerClientId = player.OwnerClientId,
+                        Position = Vector3Dto.From(player.Stick.transform.position),
+                        Rotation = QuaternionDto.From(player.Stick.transform.rotation)
+                    });
+                }
+            }
+
+            for (int i = this.activePucks.Count - 1; i >= 0; i--)
+            {
+                Puck puck = this.activePucks[i];
+                if (this.ShouldSkipPuck(puck))
+                {
+                    this.activePucks.RemoveAt(i);
+                    continue;
+                }
+
+                frame.Pucks.Add(new PuckTransformPayload
+                {
+                    NetworkObjectId = puck.NetworkObjectId,
+                    Position = Vector3Dto.From(puck.transform.position),
+                    Rotation = QuaternionDto.From(puck.transform.rotation)
+                });
+            }
+
+            if (frame.PlayerBodies.Count > 0 || frame.Sticks.Count > 0 || frame.Pucks.Count > 0)
+            {
+                this.RecordEvent("TransformFrame", frame);
+            }
+        }
+
+        private InitialSnapshotPayload BuildInitialSnapshot()
+        {
+            InitialSnapshotPayload snapshot = new InitialSnapshotPayload(this.activeBodyPlayers.Count, this.activePucks.Count, this.activeBodyPlayers.Count)
+            {
+                GameState = this.BuildGameState()
+            };
+
+            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+            if (playerManager != null)
+            {
+                foreach (Player player in playerManager.GetPlayers(false))
+                {
+                    if (this.ShouldSkipPlayer(player))
+                    {
+                        continue;
+                    }
+
+                    snapshot.Players.Add(this.BuildPlayerSnapshot(player));
+                    if (player.Stick)
+                    {
+                        snapshot.Sticks.Add(new StickSnapshotPayload
+                        {
+                            OwnerClientId = player.OwnerClientId,
+                            Position = Vector3Dto.From(player.Stick.transform.position),
+                            Rotation = QuaternionDto.From(player.Stick.transform.rotation)
+                        });
+                    }
+                }
+            }
+
+            for (int i = 0; i < this.activePucks.Count; i++)
+            {
+                Puck puck = this.activePucks[i];
+                if (this.ShouldSkipPuck(puck))
+                {
+                    continue;
+                }
+
+                snapshot.Pucks.Add(new PuckSnapshotPayload
+                {
+                    NetworkObjectId = puck.NetworkObjectId,
+                    Position = Vector3Dto.From(puck.transform.position),
+                    Rotation = QuaternionDto.From(puck.transform.rotation)
+                });
+            }
+
+            return snapshot;
+        }
+
+        private PlayerSnapshotPayload BuildPlayerSnapshot(Player player)
+        {
+            string positionName = string.Empty;
+            if (player.PlayerPosition)
+            {
+                positionName = player.PlayerPosition.Name.ToString();
+            }
+
+            return new PlayerSnapshotPayload
+            {
+                OwnerClientId = player.OwnerClientId,
+                SteamId = player.SteamId.Value.ToString(),
+                Username = player.Username.Value.ToString(),
+                Number = player.Number.Value,
+                Goals = player.Goals.Value,
+                Assists = player.Assists.Value,
+                PatreonLevel = player.PatreonLevel.Value,
+                AdminLevel = player.AdminLevel.Value,
+                Phase = player.Phase.ToString(),
+                Team = player.Team.ToString(),
+                Role = player.Role.ToString(),
+                PositionName = positionName,
+                IsMuted = player.IsMuted.Value
+            };
+        }
+
+        private GameStatePayload BuildGameState()
+        {
+            GameManager gameManager = NetworkBehaviourSingleton<GameManager>.Instance;
+            if (gameManager == null || gameManager.GameState == null)
+            {
+                return new GameStatePayload();
+            }
+
+            return new GameStatePayload
+            {
+                Phase = gameManager.Phase.ToString(),
+                Tick = gameManager.Tick,
+                Period = gameManager.Period,
+                BlueScore = gameManager.BlueScore,
+                RedScore = gameManager.RedScore,
+                IsOvertime = gameManager.IsOvertime
+            };
+        }
+
+        private void RequestScoreboardSnapshot()
+        {
+            this.scoreboardSnapshotRequested = true;
+        }
+
+        private void RecordScoreboardSnapshot()
+        {
+            if (!this.IsRecording)
+            {
+                return;
+            }
+
+            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+            if (playerManager == null)
+            {
+                return;
+            }
+
+            List<Player> players = playerManager.GetPlayers(false);
+            ScoreboardSnapshotPayload snapshot = new ScoreboardSnapshotPayload(players.Count);
+            foreach (Player player in players)
+            {
+                if (!this.ShouldSkipPlayer(player))
+                {
+                    snapshot.Players.Add(this.BuildPlayerSnapshot(player));
+                }
+            }
+
+            this.RecordEvent("ScoreboardSnapshot", snapshot);
+            this.currentSession.Header.HasScoreboard = true;
+        }
+
+        private void RecordEvent(string type, object payload)
+        {
+            if (!this.IsRecording)
+            {
+                return;
+            }
+
+            this.currentSession.Events.Add(new ReplayEventDto
+            {
+                Tick = this.currentTick,
+                Type = type,
+                Payload = payload
+            });
+        }
+
+        private void RebuildActiveObjects()
+        {
+            this.ClearActiveObjects();
+
+            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+            if (playerManager != null)
+            {
+                foreach (Player player in playerManager.GetSpawnedPlayers(false))
+                {
+                    this.AddActivePlayer(player);
+                }
+            }
+
+            PuckManager puckManager = MonoBehaviourSingleton<PuckManager>.Instance;
+            if (puckManager != null)
+            {
+                foreach (Puck puck in puckManager.GetPucks(false))
+                {
+                    this.AddActivePuck(puck);
+                }
+            }
+        }
+
+        private void ClearActiveObjects()
+        {
+            this.activeBodyPlayers.Clear();
+            this.activePucks.Clear();
+        }
+
+        private void AddActivePlayer(Player player)
+        {
+            if (this.ShouldSkipPlayer(player))
+            {
+                return;
+            }
+
+            if (!this.activeBodyPlayers.Contains(player))
+            {
+                this.activeBodyPlayers.Add(player);
+            }
+        }
+
+        private void RemoveActivePlayer(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            this.activeBodyPlayers.Remove(player);
+        }
+
+        private void AddActivePuck(Puck puck)
+        {
+            if (this.ShouldSkipPuck(puck))
+            {
+                return;
+            }
+
+            if (!this.activePucks.Contains(puck))
+            {
+                this.activePucks.Add(puck);
+            }
+        }
+
+        private void RemoveActivePuck(Puck puck)
+        {
+            if (puck == null)
+            {
+                return;
+            }
+
+            this.activePucks.Remove(puck);
+        }
+
+        private void ResetCaptureProfile(float realtime)
+        {
+            this.nextCaptureProfileRealtime = realtime + 2f;
+            this.captureProfileEndRealtime = realtime + 12f;
+            this.captureProfileTotalTicks = 0L;
+            this.captureProfileMaxTicks = 0L;
+            this.captureProfileFrames = 0;
+        }
+
+        private void TrackCaptureProfile(long elapsedTicks, float realtime)
+        {
+            if (realtime > this.captureProfileEndRealtime)
+            {
+                return;
+            }
+
+            this.captureProfileTotalTicks += elapsedTicks;
+            if (elapsedTicks > this.captureProfileMaxTicks)
+            {
+                this.captureProfileMaxTicks = elapsedTicks;
+            }
+
+            this.captureProfileFrames++;
+            if (realtime < this.nextCaptureProfileRealtime || this.captureProfileFrames <= 0)
+            {
+                return;
+            }
+
+            double tickToMilliseconds = 1000.0 / Stopwatch.Frequency;
+            double averageMilliseconds = this.captureProfileTotalTicks * tickToMilliseconds / this.captureProfileFrames;
+            double maxMilliseconds = this.captureProfileMaxTicks * tickToMilliseconds;
+            ReplayModLog.Info(
+                "Capture profile: avg " + averageMilliseconds.ToString("0.000") +
+                "ms, max " + maxMilliseconds.ToString("0.000") +
+                "ms over " + this.captureProfileFrames +
+                " frames; active players " + this.activeBodyPlayers.Count +
+                ", pucks " + this.activePucks.Count + ".");
+
+            this.captureProfileTotalTicks = 0L;
+            this.captureProfileMaxTicks = 0L;
+            this.captureProfileFrames = 0;
+            this.nextCaptureProfileRealtime += 2f;
+        }
+
+        private bool IsMarkerKeyPressed()
+        {
+            try
+            {
+                Keyboard keyboard = Keyboard.current;
+                if (keyboard == null)
+                {
+                    return false;
+                }
+
+                Key key;
+                if (!this.TryConvertMarkerKey(this.settings.MarkerKey, out key))
+                {
+                    return false;
+                }
+
+                return keyboard[key] != null && keyboard[key].wasPressedThisFrame;
+            }
+            catch (Exception exception)
+            {
+                if (!this.markerInputFailureLogged)
+                {
+                    this.markerInputFailureLogged = true;
+                    ReplayModLog.Warning("Marker hotkey polling failed: " + exception.Message);
+                }
+
+                return false;
+            }
+        }
+
+        private bool TryConvertMarkerKey(KeyCode keyCode, out Key key)
+        {
+            string keyName = keyCode.ToString();
+            if (keyName.StartsWith("Alpha", StringComparison.Ordinal))
+            {
+                keyName = "Digit" + keyName.Substring("Alpha".Length);
+            }
+
+            if (Enum.TryParse(keyName, true, out key))
+            {
+                return key != Key.None;
+            }
+
+            return false;
+        }
+
+        private bool ShouldSkipPlayer(Player player)
+        {
+            return player == null || player.IsReplay.Value;
+        }
+
+        private bool ShouldSkipPlayerBody(PlayerBody playerBody)
+        {
+            return playerBody == null || playerBody.Player == null || playerBody.Player.IsReplay.Value;
+        }
+
+        private bool ShouldSkipPuck(Puck puck)
+        {
+            return puck == null || puck.IsReplay.Value;
+        }
+
+        private string GetServerName()
+        {
+            try
+            {
+                ServerManager serverManager = NetworkBehaviourSingleton<ServerManager>.Instance;
+                if (serverManager != null && serverManager.Server != null)
+                {
+                    string value = serverManager.Server.Value.Name.Value.ToString();
+                    if (!string.IsNullOrEmpty(value))
+                    {
+                        return value;
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            return "Unknown Server";
+        }
+
+        private string GetRecorderName()
+        {
+            try
+            {
+                PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+                Player localPlayer = playerManager != null ? playerManager.GetLocalPlayer() : null;
+                if (localPlayer != null)
+                {
+                    return localPlayer.Username.Value.ToString();
+                }
+            }
+            catch
+            {
+            }
+
+            return "Unknown Player";
+        }
+    }
+}

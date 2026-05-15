@@ -2,6 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net4.8</TargetFramework>
+    <AssemblyName>PuckReplayMod</AssemblyName>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,12 +20,14 @@
     <None Include="src\**\*.cs" />
     <Compile Remove="og_src\**\*.cs" />
     <None Include="og_src\**\*.cs" />
+    <Compile Remove="og_replaymod_src\**\*.cs" />
+    <None Include="og_replaymod_src\**\*.cs" />
   </ItemGroup>
 
   <Target Name="PostBuildMoveDll" AfterTargets="Build">
     <PropertyGroup>
-      <TargetDir>F:\Steam\steamapps\common\Puck\Plugins\Template Mod</TargetDir>
-      <WorkshopDir>F:\Downloads\SteamWorkshopUploader\WorkshopContent\Template Mod</WorkshopDir>
+      <TargetDir>F:\Steam\steamapps\common\Puck\Plugins\Replay Mod</TargetDir>
+      <WorkshopDir>F:\Downloads\SteamWorkshopUploader\WorkshopContent\Replay Mod</WorkshopDir>
     </PropertyGroup>
 
     <MakeDir Directories="$(TargetDir)" />
