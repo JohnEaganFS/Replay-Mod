@@ -13,7 +13,7 @@ namespace PuckReplayMod
         public const int ReplayDtoFormatVersion = 3;
         public const int ReplayBinaryFormatVersion = 3;
         public const int ReplaySummaryCacheVersion = 3;
-        public const string UpdateManifestUrl = "";
-        public const string UpdateDownloadUrl = "";
+        public const string UpdateManifestUrl = "https://raw.githubusercontent.com/JohnEaganFS/Replay-Mod/main/update-manifest.json";
+        public const string UpdateDownloadUrl = "https://steamcommunity.com/sharedfiles/filedetails/?id=3726818657";
     }
 }
