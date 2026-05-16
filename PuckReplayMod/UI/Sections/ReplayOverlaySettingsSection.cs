@@ -65,6 +65,15 @@ namespace PuckReplayMod
             }));
 
             parent.Add(ReplayUiTools.CreateSeparator());
+            parent.Add(ReplayUiTools.CreateHeader("Playback Smoothing"));
+
+            parent.Add(ReplayUiTools.CreateToggleRow("Smooth slow motion playback", "Interpolates replay bodies, sticks, and pucks between recorded ticks while playback speed is below 1x. Paused, tick-by-tick, and seeked playback still uses exact recorded ticks.", ui.Settings.EnableSlowMotionInterpolation, delegate(bool value)
+            {
+                ui.Settings.EnableSlowMotionInterpolation = value;
+                ui.SaveSettings();
+            }));
+
+            parent.Add(ReplayUiTools.CreateSeparator());
             parent.Add(ReplayUiTools.CreateHeader("Playback Camera"));
 
             parent.Add(ReplayUiTools.CreateFloatSliderRow("3rd person camera distance", "How far the replay camera sits behind the selected player in 3rd person POV.", ui.Settings.PlaybackThirdPersonCameraDistance, 1.5f, 12f, delegate(float value)

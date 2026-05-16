@@ -70,6 +70,16 @@ namespace PuckReplayMod
             parent.Add(ReplayUiTools.CreateHeader("Display"));
 
             parent.Add(CreateKeybindRow(
+                "Toggle capture mode",
+                "Press this while watching a replay to hide or restore the UI elements selected in the Capture section.",
+                ui.Settings.CaptureModeKey,
+                delegate(KeyCode value)
+            {
+                ui.Settings.CaptureModeKey = value;
+                ui.SaveSettings();
+            }));
+
+            parent.Add(CreateKeybindRow(
                 "Toggle status badge",
                 "Press this key to quickly show or hide the Replay Mod status badge.",
                 ui.Settings.ToggleStatusBadgeKey,

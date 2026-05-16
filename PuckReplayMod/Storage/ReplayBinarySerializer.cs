@@ -22,6 +22,7 @@ namespace PuckReplayMod
         private const byte EventMarker = 13;
         private const byte EventStickSpawned = 14;
         private const byte EventStickDespawned = 15;
+        private const byte EventGoalScored = 16;
 
         public static bool IsBinaryReplay(string filePath)
         {
@@ -280,6 +281,9 @@ namespace PuckReplayMod
                 case EventMarker:
                     WriteMarker(writer, replayEvent.Payload as MarkerPayload);
                     return;
+                case EventGoalScored:
+                    WriteGoalScored(writer, replayEvent.Payload as GoalScoredPayload);
+                    return;
                 default:
                     throw new InvalidDataException("Unknown binary event kind: " + eventKind + ".");
             }
@@ -328,6 +332,8 @@ namespace PuckReplayMod
                     return ReadChatMessage(reader);
                 case EventMarker:
                     return ReadMarker(reader);
+                case EventGoalScored:
+                    return ReadGoalScored(reader);
                 default:
                     throw new InvalidDataException("Unknown binary event kind: " + eventKind + ".");
             }
@@ -367,6 +373,8 @@ namespace PuckReplayMod
                     return EventChatMessage;
                 case "Marker":
                     return EventMarker;
+                case "GoalScored":
+                    return EventGoalScored;
                 default:
                     throw new InvalidDataException("Replay event type is not supported by the binary format: " + (type ?? "<null>") + ".");
             }
@@ -406,6 +414,8 @@ namespace PuckReplayMod
                     return "ChatMessage";
                 case EventMarker:
                     return "Marker";
+                case EventGoalScored:
+                    return "GoalScored";
                 default:
                     throw new InvalidDataException("Unknown binary event kind: " + eventKind + ".");
             }
@@ -713,6 +723,50 @@ namespace PuckReplayMod
             {
                 CreatedUtcTicks = reader.ReadInt64()
             };
+        }
+
+        private static void WriteGoalScored(BinaryWriter writer, GoalScoredPayload payload)
+        {
+            payload = payload ?? new GoalScoredPayload();
+            WriteString(writer, payload.Team);
+            writer.Write(payload.BlueScore);
+            writer.Write(payload.RedScore);
+            WriteNullablePlayerSnapshot(writer, payload.Scorer);
+            WriteNullablePlayerSnapshot(writer, payload.Assist);
+            WriteNullablePlayerSnapshot(writer, payload.SecondAssist);
+            writer.Write(payload.PuckNetworkObjectId);
+            writer.Write(payload.PuckSpeed);
+            writer.Write(payload.PuckShotSpeed);
+        }
+
+        private static GoalScoredPayload ReadGoalScored(BinaryReader reader)
+        {
+            return new GoalScoredPayload
+            {
+                Team = ReadString(reader),
+                BlueScore = reader.ReadInt32(),
+                RedScore = reader.ReadInt32(),
+                Scorer = ReadNullablePlayerSnapshot(reader),
+                Assist = ReadNullablePlayerSnapshot(reader),
+                SecondAssist = ReadNullablePlayerSnapshot(reader),
+                PuckNetworkObjectId = reader.ReadUInt64(),
+                PuckSpeed = reader.ReadSingle(),
+                PuckShotSpeed = reader.ReadSingle()
+            };
+        }
+
+        private static void WriteNullablePlayerSnapshot(BinaryWriter writer, PlayerSnapshotPayload payload)
+        {
+            writer.Write(payload != null);
+            if (payload != null)
+            {
+                WritePlayerSnapshot(writer, payload);
+            }
+        }
+
+        private static PlayerSnapshotPayload ReadNullablePlayerSnapshot(BinaryReader reader)
+        {
+            return reader.ReadBoolean() ? ReadPlayerSnapshot(reader) : null;
         }
 
         private static void WritePlayerBodyTransformList(BinaryWriter writer, List<PlayerBodyTransformPayload> items)

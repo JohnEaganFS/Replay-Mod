@@ -685,13 +685,6 @@ namespace PuckReplayMod
             foreach (VisualElement item in popup.Query<VisualElement>(null, "unity-base-dropdown__item").Build())
             {
                 item.style.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 0.92f);
-                item.style.alignItems = Align.Center;
-                item.style.justifyContent = Justify.Center;
-                item.style.minHeight = 32f;
-                item.style.paddingTop = 0f;
-                item.style.paddingBottom = 0f;
-                item.style.paddingLeft = 12f;
-                item.style.paddingRight = 12f;
 
                 VisualElement capturedItem = item;
                 capturedItem.RegisterCallback<MouseEnterEvent>(delegate

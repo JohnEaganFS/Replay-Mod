@@ -10,12 +10,14 @@ namespace PuckReplayMod
     public class NativeReplayPlaybackService
     {
         private static readonly FieldInfo ReplayPuckNetworkObjectIdMapField = typeof(ReplayPlayer).GetField("replayPuckNetworkObjectIdMap", BindingFlags.Instance | BindingFlags.NonPublic);
+        private const ulong ReplayOwnerClientIdOffset = 1337UL;
         internal static readonly Vector3 ReplaySpectatorSpawnPosition = new Vector3(0f, 6f, 0f);
         internal static readonly Quaternion ReplaySpectatorSpawnRotation = Quaternion.Euler(22f, 0f, 0f);
 
         private readonly NativeReplayEventConverter converter = new NativeReplayEventConverter();
         private readonly ReplayModSettings settings;
         private readonly ReplayGameStatePlaybackService gameStatePlayback;
+        private readonly List<CameraTargetTimelineEvent> cameraTargetTimeline = new List<CameraTargetTimelineEvent>();
 
         private ReplayPlayer replayPlayer;
         private ReplaySessionData currentSession;
@@ -34,6 +36,7 @@ namespace PuckReplayMod
         private bool firstPersonCameraSmoothingInitialized;
         private ulong? firstPersonCameraSmoothingTargetClientId;
         private Quaternion firstPersonCameraSmoothedRotation = Quaternion.identity;
+        private float nextSlowMotionInterpolationDebugRealtime;
 
         public NativeReplayPlaybackService(ReplayModSettings settings)
         {
@@ -156,6 +159,7 @@ namespace PuckReplayMod
             this.currentSession = session;
             this.currentEventMap = eventMap;
             this.currentTickRate = session != null && session.Header != null ? Math.Max(1, session.Header.TickRate) : 30;
+            this.BuildCameraTargetRoster(session);
             this.EnsureCameraTarget();
 
             if (this.replayPlayer.IsReplaying)
@@ -195,6 +199,7 @@ namespace PuckReplayMod
 
             this.EnforcePausedReplayObjectSnapshots();
             this.gameStatePlayback.ApplyThrough(this.CurrentTick);
+            this.ApplySlowMotionInterpolation();
         }
 
         public void SetPaused(bool paused)
@@ -247,28 +252,41 @@ namespace PuckReplayMod
 
         public List<ReplayPlaybackPlayerTarget> GetCameraTargets()
         {
-            List<ReplayPlaybackPlayerTarget> targets = new List<ReplayPlaybackPlayerTarget>();
-            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
-            if (playerManager == null)
+            int currentTick = this.CurrentTick;
+            Dictionary<ulong, string> labelsByClientId = new Dictionary<ulong, string>();
+            Dictionary<ulong, PlayerSnapshotPayload> availableTargets = this.GetAvailableCameraTargetSnapshots(currentTick);
+            foreach (PlayerSnapshotPayload playerSnapshot in availableTargets.Values)
             {
-                return targets;
-            }
-
-            foreach (Player player in playerManager.GetReplayPlayers())
-            {
-                if (player == null)
+                if (playerSnapshot == null)
                 {
                     continue;
                 }
 
-                string username = player.Username.Value.ToString();
-                string label = string.IsNullOrEmpty(username) ? "Replay Player " + player.OwnerClientId : username;
-                if (player.Number.Value > 0)
-                {
-                    label = "#" + player.Number.Value + " " + label;
-                }
+                labelsByClientId[playerSnapshot.OwnerClientId] = FormatCameraTargetLabel(playerSnapshot);
+            }
 
-                targets.Add(new ReplayPlaybackPlayerTarget(player.OwnerClientId, label));
+            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+            if (playerManager != null)
+            {
+                foreach (Player player in playerManager.GetReplayPlayers())
+                {
+                    if (player == null)
+                    {
+                        continue;
+                    }
+
+                    ulong originalOwnerClientId = ToOriginalReplayOwnerClientId(player.OwnerClientId);
+                    if (availableTargets.ContainsKey(originalOwnerClientId))
+                    {
+                        labelsByClientId[originalOwnerClientId] = FormatCameraTargetLabel(player, originalOwnerClientId);
+                    }
+                }
+            }
+
+            List<ReplayPlaybackPlayerTarget> targets = new List<ReplayPlaybackPlayerTarget>(labelsByClientId.Count);
+            foreach (KeyValuePair<ulong, string> entry in labelsByClientId)
+            {
+                targets.Add(new ReplayPlaybackPlayerTarget(entry.Key, entry.Value));
             }
 
             targets.Sort((left, right) => string.Compare(left.DisplayName, right.DisplayName, StringComparison.OrdinalIgnoreCase));
@@ -288,6 +306,7 @@ namespace PuckReplayMod
             }
 
             this.EnforcePausedReplayObjectSnapshots();
+            this.EnsureCameraTarget();
             Player target = this.GetCameraTargetPlayer();
             if (target == null || target.PlayerBody == null)
             {
@@ -440,6 +459,7 @@ namespace PuckReplayMod
             this.pausedBodySnapshots.Clear();
             this.pausedStickSnapshots.Clear();
             this.pausedPuckSnapshots.Clear();
+            this.cameraTargetTimeline.Clear();
             this.currentTickRate = 30;
             this.replayPlayer = null;
             this.replaySpectatorCameraAdjusted = false;
@@ -457,13 +477,30 @@ namespace PuckReplayMod
                 return;
             }
 
-            if (this.GetCameraTargetPlayer() != null)
+            int currentTick = this.CurrentTick;
+            if (this.cameraTargetClientId.HasValue && this.IsAvailableCameraTarget(this.cameraTargetClientId.Value, currentTick))
             {
                 return;
             }
 
-            List<ReplayPlaybackPlayerTarget> targets = this.GetCameraTargets();
-            this.cameraTargetClientId = targets.Count > 0 ? (ulong?)targets[0].OwnerClientId : null;
+            ulong activeClientId;
+            if (this.TryGetFirstAvailableCameraTarget(currentTick, out activeClientId))
+            {
+                if (this.cameraMode == ReplayPlaybackCameraMode.FirstPerson && this.cameraTargetClientId != activeClientId)
+                {
+                    this.RestoreFirstPersonTargetRenderers();
+                }
+
+                this.cameraTargetClientId = activeClientId;
+                this.ResetFirstPersonCameraSmoothing();
+                return;
+            }
+
+            this.cameraTargetClientId = null;
+            this.cameraMode = ReplayPlaybackCameraMode.Free;
+            this.ResetFirstPersonCameraSmoothing();
+            this.RestoreFirstPersonTargetRenderers();
+            this.RestoreLocalSpectatorFieldOfView();
         }
 
         private Player GetCameraTargetPlayer()
@@ -476,11 +513,7 @@ namespace PuckReplayMod
 
             if (this.cameraTargetClientId.HasValue)
             {
-                Player selected = playerManager.GetReplayPlayerByClientId(this.cameraTargetClientId.Value);
-                if (selected != null)
-                {
-                    return selected;
-                }
+                return playerManager.GetReplayPlayerByClientId(this.cameraTargetClientId.Value);
             }
 
             foreach (Player player in playerManager.GetReplayPlayers())
@@ -492,6 +525,202 @@ namespace PuckReplayMod
             }
 
             return null;
+        }
+
+        private void BuildCameraTargetRoster(ReplaySessionData session)
+        {
+            this.cameraTargetTimeline.Clear();
+            if (session == null || session.Events == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < session.Events.Count; i++)
+            {
+                ReplayEventDto replayEvent = session.Events[i];
+                if (replayEvent == null)
+                {
+                    continue;
+                }
+
+                this.TrackCameraTargetPayload(replayEvent.Type, replayEvent.Tick, i, replayEvent.Payload);
+            }
+
+            this.cameraTargetTimeline.Sort(delegate(CameraTargetTimelineEvent left, CameraTargetTimelineEvent right)
+            {
+                int tickCompare = left.Tick.CompareTo(right.Tick);
+                return tickCompare != 0 ? tickCompare : left.Sequence.CompareTo(right.Sequence);
+            });
+        }
+
+        private void TrackCameraTargetPayload(string eventName, int tick, int sequence, object payload)
+        {
+            InitialSnapshotPayload initialSnapshot = payload as InitialSnapshotPayload;
+            if (initialSnapshot != null)
+            {
+                this.TrackCameraTargetPlayers(initialSnapshot.Players, tick, sequence, true);
+                if (initialSnapshot.PlayerBodies != null)
+                {
+                    for (int i = 0; i < initialSnapshot.PlayerBodies.Count; i++)
+                    {
+                        BodyLifecyclePayload body = initialSnapshot.PlayerBodies[i];
+                        if (body != null)
+                        {
+                            this.AddCameraTargetTimelineEvent(tick, sequence, body.Player, null);
+                        }
+                    }
+                }
+
+                return;
+            }
+
+            PlayerSnapshotPayload playerSnapshot = payload as PlayerSnapshotPayload;
+            if (playerSnapshot != null)
+            {
+                this.AddCameraTargetTimelineEvent(tick, sequence, playerSnapshot, null);
+                return;
+            }
+
+            PlayerLifecyclePayload playerLifecycle = payload as PlayerLifecyclePayload;
+            if (playerLifecycle != null)
+            {
+                bool? isAvailable = null;
+                if (string.Equals(eventName, "PlayerSpawned", StringComparison.Ordinal))
+                {
+                    isAvailable = true;
+                }
+                else if (string.Equals(eventName, "PlayerDespawned", StringComparison.Ordinal))
+                {
+                    isAvailable = false;
+                }
+
+                this.AddCameraTargetTimelineEvent(tick, sequence, playerLifecycle.Player, isAvailable);
+                return;
+            }
+
+            BodyLifecyclePayload bodyLifecycle = payload as BodyLifecyclePayload;
+            if (bodyLifecycle != null)
+            {
+                this.AddCameraTargetTimelineEvent(tick, sequence, bodyLifecycle.Player, null);
+                return;
+            }
+
+            ScoreboardSnapshotPayload scoreboard = payload as ScoreboardSnapshotPayload;
+            if (scoreboard != null)
+            {
+                this.TrackCameraTargetPlayers(scoreboard.Players, tick, sequence, null);
+            }
+        }
+
+        private void TrackCameraTargetPlayers(List<PlayerSnapshotPayload> players, int tick, int sequence, bool? isAvailable)
+        {
+            if (players == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < players.Count; i++)
+            {
+                this.AddCameraTargetTimelineEvent(tick, sequence, players[i], isAvailable);
+            }
+        }
+
+        private void AddCameraTargetTimelineEvent(int tick, int sequence, PlayerSnapshotPayload player, bool? isAvailable)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            this.cameraTargetTimeline.Add(new CameraTargetTimelineEvent(tick, sequence, player.OwnerClientId, isAvailable, player));
+        }
+
+        private Dictionary<ulong, PlayerSnapshotPayload> GetAvailableCameraTargetSnapshots(int currentTick)
+        {
+            Dictionary<ulong, PlayerSnapshotPayload> availableTargets = new Dictionary<ulong, PlayerSnapshotPayload>();
+            for (int i = 0; i < this.cameraTargetTimeline.Count; i++)
+            {
+                CameraTargetTimelineEvent timelineEvent = this.cameraTargetTimeline[i];
+                if (timelineEvent.Tick > currentTick)
+                {
+                    break;
+                }
+
+                if (timelineEvent.IsAvailable.HasValue)
+                {
+                    if (timelineEvent.IsAvailable.Value)
+                    {
+                        availableTargets[timelineEvent.OwnerClientId] = timelineEvent.Player;
+                    }
+                    else
+                    {
+                        availableTargets.Remove(timelineEvent.OwnerClientId);
+                    }
+
+                    continue;
+                }
+
+                if (availableTargets.ContainsKey(timelineEvent.OwnerClientId))
+                {
+                    availableTargets[timelineEvent.OwnerClientId] = timelineEvent.Player;
+                }
+            }
+
+            return availableTargets;
+        }
+
+        private bool IsAvailableCameraTarget(ulong ownerClientId, int currentTick)
+        {
+            return this.GetAvailableCameraTargetSnapshots(currentTick).ContainsKey(ownerClientId);
+        }
+
+        private bool TryGetFirstAvailableCameraTarget(int currentTick, out ulong ownerClientId)
+        {
+            ownerClientId = 0UL;
+            Dictionary<ulong, PlayerSnapshotPayload> availableTargets = this.GetAvailableCameraTargetSnapshots(currentTick);
+            List<ReplayPlaybackPlayerTarget> targets = new List<ReplayPlaybackPlayerTarget>(availableTargets.Count);
+            foreach (PlayerSnapshotPayload playerSnapshot in availableTargets.Values)
+            {
+                targets.Add(new ReplayPlaybackPlayerTarget(playerSnapshot.OwnerClientId, FormatCameraTargetLabel(playerSnapshot)));
+            }
+
+            targets.Sort((left, right) => string.Compare(left.DisplayName, right.DisplayName, StringComparison.OrdinalIgnoreCase));
+            if (targets.Count == 0)
+            {
+                return false;
+            }
+
+            ownerClientId = targets[0].OwnerClientId;
+            return true;
+        }
+
+        private static ulong ToOriginalReplayOwnerClientId(ulong ownerClientId)
+        {
+            return ownerClientId >= ReplayOwnerClientIdOffset ? ownerClientId - ReplayOwnerClientIdOffset : ownerClientId;
+        }
+
+        private static string FormatCameraTargetLabel(PlayerSnapshotPayload player)
+        {
+            string username = player != null ? player.Username : null;
+            string label = string.IsNullOrEmpty(username) ? "Replay Player " + (player != null ? player.OwnerClientId.ToString() : "Unknown") : username;
+            if (player != null && player.Number > 0)
+            {
+                label = "#" + player.Number + " " + label;
+            }
+
+            return label;
+        }
+
+        private static string FormatCameraTargetLabel(Player player, ulong originalOwnerClientId)
+        {
+            string username = player.Username.Value.ToString();
+            string label = string.IsNullOrEmpty(username) ? "Replay Player " + originalOwnerClientId : username;
+            if (player.Number.Value > 0)
+            {
+                label = "#" + player.Number.Value + " " + label;
+            }
+
+            return label;
         }
 
         private float GetThirdPersonCameraDistance()
@@ -670,6 +899,24 @@ namespace PuckReplayMod
 
             public Renderer Renderer;
             public bool WasEnabled;
+        }
+
+        private sealed class CameraTargetTimelineEvent
+        {
+            public CameraTargetTimelineEvent(int tick, int sequence, ulong ownerClientId, bool? isAvailable, PlayerSnapshotPayload player)
+            {
+                this.Tick = tick;
+                this.Sequence = sequence;
+                this.OwnerClientId = ownerClientId;
+                this.IsAvailable = isAvailable;
+                this.Player = player;
+            }
+
+            public int Tick;
+            public int Sequence;
+            public ulong OwnerClientId;
+            public bool? IsAvailable;
+            public PlayerSnapshotPayload Player;
         }
 
         private void RestoreLocalSpectatorFieldOfView()
@@ -957,6 +1204,293 @@ namespace PuckReplayMod
                 puck.transform.DOKill(false);
                 ApplyTransformAndRigidbody(puck.transform, puck.Rigidbody, move.Position, move.Rotation);
             }
+        }
+
+        private void ApplySlowMotionInterpolation()
+        {
+            if (this.settings == null ||
+                !this.settings.EnableSlowMotionInterpolation ||
+                !this.IsPlaying ||
+                ReplayPlaybackRuntime.IsPaused ||
+                this.replayPlayer == null ||
+                this.currentEventMap == null ||
+                ReplayPlaybackRuntime.PlaybackSpeed >= 0.999f)
+            {
+                return;
+            }
+
+            float fraction = ReplayPlaybackRuntime.GetInterpolationFraction(this.replayPlayer);
+            if (fraction <= 0.001f)
+            {
+                return;
+            }
+
+            int currentTick = this.CurrentTick;
+            int nextTick = currentTick + 1;
+            if (this.HasLifecycleEventsBetween(currentTick, nextTick))
+            {
+                this.LogSlowMotionInterpolationDebug(currentTick, nextTick, fraction, "skipped lifecycle event", 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                return;
+            }
+
+            Dictionary<ulong, ReplayPlayerBodyMove> currentBodyMoves;
+            Dictionary<ulong, ReplayStickMove> currentStickMoves;
+            Dictionary<ulong, ReplayPuckMove> currentPuckMoves;
+            Dictionary<ulong, ReplayPlayerBodyMove> nextBodyMoves;
+            Dictionary<ulong, ReplayStickMove> nextStickMoves;
+            Dictionary<ulong, ReplayPuckMove> nextPuckMoves;
+            this.GetTransformMovesAtTick(currentTick, out currentBodyMoves, out currentStickMoves, out currentPuckMoves);
+            this.GetTransformMovesAtTick(nextTick, out nextBodyMoves, out nextStickMoves, out nextPuckMoves);
+
+            int matchedBodies = CountMatchingKeys(currentBodyMoves, nextBodyMoves);
+            int matchedSticks = CountMatchingKeys(currentStickMoves, nextStickMoves);
+            int matchedPucks = CountMatchingKeys(currentPuckMoves, nextPuckMoves);
+            int appliedBodies = this.ApplyInterpolatedBodyMoves(currentBodyMoves, nextBodyMoves, fraction);
+            int appliedSticks = this.ApplyInterpolatedStickMoves(currentStickMoves, nextStickMoves, fraction);
+            int appliedPucks = this.ApplyInterpolatedPuckMoves(currentPuckMoves, nextPuckMoves, fraction);
+            this.ForceReplayPlayerMeshPoses();
+            this.LogSlowMotionInterpolationDebug(
+                currentTick,
+                nextTick,
+                fraction,
+                "applied",
+                currentBodyMoves.Count,
+                matchedBodies,
+                appliedBodies,
+                currentStickMoves.Count,
+                matchedSticks,
+                appliedSticks,
+                currentPuckMoves.Count,
+                matchedPucks,
+                appliedPucks);
+        }
+
+        private void GetTransformMovesAtTick(
+            int tick,
+            out Dictionary<ulong, ReplayPlayerBodyMove> bodyMoves,
+            out Dictionary<ulong, ReplayStickMove> stickMoves,
+            out Dictionary<ulong, ReplayPuckMove> puckMoves)
+        {
+            bodyMoves = new Dictionary<ulong, ReplayPlayerBodyMove>();
+            stickMoves = new Dictionary<ulong, ReplayStickMove>();
+            puckMoves = new Dictionary<ulong, ReplayPuckMove>();
+            if (this.currentEventMap == null)
+            {
+                return;
+            }
+
+            List<ValueTuple<string, object>> events;
+            if (!this.currentEventMap.TryGetValue(tick, out events) || events == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < events.Count; i++)
+            {
+                ValueTuple<string, object> replayEvent = events[i];
+                if (replayEvent.Item1 == "PlayerBodyMove" && replayEvent.Item2 is ReplayPlayerBodyMove)
+                {
+                    ReplayPlayerBodyMove move = (ReplayPlayerBodyMove)replayEvent.Item2;
+                    bodyMoves[move.OwnerClientId] = move;
+                }
+                else if (replayEvent.Item1 == "StickMove" && replayEvent.Item2 is ReplayStickMove)
+                {
+                    ReplayStickMove move = (ReplayStickMove)replayEvent.Item2;
+                    stickMoves[move.OwnerClientId] = move;
+                }
+                else if (replayEvent.Item1 == "PuckMove" && replayEvent.Item2 is ReplayPuckMove)
+                {
+                    ReplayPuckMove move = (ReplayPuckMove)replayEvent.Item2;
+                    puckMoves[move.NetworkObjectId] = move;
+                }
+            }
+        }
+
+        private int ApplyInterpolatedBodyMoves(
+            Dictionary<ulong, ReplayPlayerBodyMove> currentMoves,
+            Dictionary<ulong, ReplayPlayerBodyMove> nextMoves,
+            float fraction)
+        {
+            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+            if (playerManager == null || currentMoves == null || nextMoves == null)
+            {
+                return 0;
+            }
+
+            int applied = 0;
+            foreach (KeyValuePair<ulong, ReplayPlayerBodyMove> entry in currentMoves)
+            {
+                ReplayPlayerBodyMove nextMove;
+                if (!nextMoves.TryGetValue(entry.Key, out nextMove))
+                {
+                    continue;
+                }
+
+                Player player = playerManager.GetReplayPlayerByClientId(entry.Key);
+                if (player == null || player.PlayerBody == null)
+                {
+                    continue;
+                }
+
+                ReplayPlayerBodyMove currentMove = entry.Value;
+                Vector3 position = Vector3.Lerp(currentMove.Position, nextMove.Position, fraction);
+                Quaternion rotation = Quaternion.Slerp(currentMove.Rotation, nextMove.Rotation, fraction);
+                player.PlayerBody.transform.DOKill(false);
+                ApplyTransformAndRigidbody(player.PlayerBody.transform, player.PlayerBody.Rigidbody, position, rotation);
+                player.PlayerBody.Stamina.Value = Mathf.Lerp(currentMove.Stamina, nextMove.Stamina, fraction);
+                player.PlayerBody.Speed.Value = Mathf.Lerp(currentMove.Speed, nextMove.Speed, fraction);
+                player.PlayerBody.IsSprinting.Value = fraction < 0.5f ? currentMove.IsSprinting : nextMove.IsSprinting;
+                player.PlayerBody.IsSliding.Value = fraction < 0.5f ? currentMove.IsSliding : nextMove.IsSliding;
+                player.PlayerBody.IsStopping.Value = fraction < 0.5f ? currentMove.IsStopping : nextMove.IsStopping;
+                player.PlayerBody.IsExtendedLeft.Value = fraction < 0.5f ? currentMove.IsExtendedLeft : nextMove.IsExtendedLeft;
+                player.PlayerBody.IsExtendedRight.Value = fraction < 0.5f ? currentMove.IsExtendedRight : nextMove.IsExtendedRight;
+                applied++;
+            }
+
+            return applied;
+        }
+
+        private int ApplyInterpolatedStickMoves(
+            Dictionary<ulong, ReplayStickMove> currentMoves,
+            Dictionary<ulong, ReplayStickMove> nextMoves,
+            float fraction)
+        {
+            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+            if (playerManager == null || currentMoves == null || nextMoves == null)
+            {
+                return 0;
+            }
+
+            int applied = 0;
+            foreach (KeyValuePair<ulong, ReplayStickMove> entry in currentMoves)
+            {
+                ReplayStickMove nextMove;
+                if (!nextMoves.TryGetValue(entry.Key, out nextMove))
+                {
+                    continue;
+                }
+
+                Player player = playerManager.GetReplayPlayerByClientId(entry.Key);
+                if (player == null || player.Stick == null)
+                {
+                    continue;
+                }
+
+                ReplayStickMove currentMove = entry.Value;
+                Vector3 position = Vector3.Lerp(currentMove.Position, nextMove.Position, fraction);
+                Quaternion rotation = Quaternion.Slerp(currentMove.Rotation, nextMove.Rotation, fraction);
+                player.Stick.transform.DOKill(false);
+                ApplyTransformAndRigidbody(player.Stick.transform, player.Stick.Rigidbody, position, rotation);
+                applied++;
+            }
+
+            return applied;
+        }
+
+        private int ApplyInterpolatedPuckMoves(
+            Dictionary<ulong, ReplayPuckMove> currentMoves,
+            Dictionary<ulong, ReplayPuckMove> nextMoves,
+            float fraction)
+        {
+            PuckManager puckManager = MonoBehaviourSingleton<PuckManager>.Instance;
+            if (puckManager == null || ReplayPuckNetworkObjectIdMapField == null || this.replayPlayer == null || currentMoves == null || nextMoves == null)
+            {
+                return 0;
+            }
+
+            Dictionary<ulong, ulong> puckIdMap = ReplayPuckNetworkObjectIdMapField.GetValue(this.replayPlayer) as Dictionary<ulong, ulong>;
+            if (puckIdMap == null)
+            {
+                return 0;
+            }
+
+            int applied = 0;
+            foreach (KeyValuePair<ulong, ReplayPuckMove> entry in currentMoves)
+            {
+                ReplayPuckMove nextMove;
+                if (!nextMoves.TryGetValue(entry.Key, out nextMove))
+                {
+                    continue;
+                }
+
+                ulong replayNetworkObjectId;
+                if (!puckIdMap.TryGetValue(entry.Key, out replayNetworkObjectId))
+                {
+                    continue;
+                }
+
+                Puck puck = puckManager.GetReplayPuckByNetworkObjectId(replayNetworkObjectId);
+                if (puck == null)
+                {
+                    continue;
+                }
+
+                ReplayPuckMove currentMove = entry.Value;
+                Vector3 position = Vector3.Lerp(currentMove.Position, nextMove.Position, fraction);
+                Quaternion rotation = Quaternion.Slerp(currentMove.Rotation, nextMove.Rotation, fraction);
+                puck.transform.DOKill(false);
+                ApplyTransformAndRigidbody(puck.transform, puck.Rigidbody, position, rotation);
+                applied++;
+            }
+
+            return applied;
+        }
+
+        private void LogSlowMotionInterpolationDebug(
+            int currentTick,
+            int nextTick,
+            float fraction,
+            string reason,
+            int currentBodies,
+            int matchedBodies,
+            int appliedBodies,
+            int currentSticks,
+            int matchedSticks,
+            int appliedSticks,
+            int currentPucks,
+            int matchedPucks,
+            int appliedPucks)
+        {
+            if (this.settings == null || !this.settings.EnableDebugProfiling)
+            {
+                return;
+            }
+
+            float realtime = Time.realtimeSinceStartup;
+            if (realtime < this.nextSlowMotionInterpolationDebugRealtime)
+            {
+                return;
+            }
+
+            this.nextSlowMotionInterpolationDebugRealtime = realtime + 1f;
+            ReplayModLog.Info(
+                "[Slow Motion Interpolation] " +
+                "reason=" + reason +
+                ", tick=" + currentTick + "->" + nextTick +
+                ", fraction=" + fraction.ToString("0.000", System.Globalization.CultureInfo.InvariantCulture) +
+                ", speed=" + ReplayPlaybackRuntime.PlaybackSpeed.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture) +
+                ", bodies=" + appliedBodies + "/" + matchedBodies + "/" + currentBodies +
+                ", sticks=" + appliedSticks + "/" + matchedSticks + "/" + currentSticks +
+                ", pucks=" + appliedPucks + "/" + matchedPucks + "/" + currentPucks);
+        }
+
+        private static int CountMatchingKeys<TValue>(Dictionary<ulong, TValue> currentMoves, Dictionary<ulong, TValue> nextMoves)
+        {
+            if (currentMoves == null || nextMoves == null)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            foreach (ulong key in currentMoves.Keys)
+            {
+                if (nextMoves.ContainsKey(key))
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
 
         internal static void ApplyTransformAndRigidbody(Transform transform, Rigidbody rigidbody, Vector3 position, Quaternion rotation)

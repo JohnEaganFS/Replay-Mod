@@ -261,6 +261,38 @@ namespace PuckReplayMod
         }
     }
 
+    [HarmonyPatch(typeof(ReplayManager), "Server_StartReplaying")]
+    public static class ReplayManagerStartGameReplayDuringPlaybackPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix()
+        {
+            if (!ReplayInputBlocker.ShouldBlockNativeGameReplayDuringPlayback())
+            {
+                return true;
+            }
+
+            ReplayModLog.Info("Blocked native goal replay start during Replay Mod playback.");
+            return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(ReplayManager), "Server_StopReplaying")]
+    public static class ReplayManagerStopGameReplayDuringPlaybackPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix()
+        {
+            if (!ReplayInputBlocker.ShouldBlockNativeGameReplayDuringPlayback())
+            {
+                return true;
+            }
+
+            ReplayModLog.Info("Blocked native goal replay stop during Replay Mod playback.");
+            return false;
+        }
+    }
+
     [HarmonyPatch(typeof(Stick), "FixedUpdate")]
     public static class StickFixedUpdateDuringReplayPatch
     {
@@ -603,6 +635,11 @@ namespace PuckReplayMod
         }
 
         public static bool ShouldBlockLiveChatDuringPlayback()
+        {
+            return IsPlaybackActive();
+        }
+
+        public static bool ShouldBlockNativeGameReplayDuringPlayback()
         {
             return IsPlaybackActive();
         }

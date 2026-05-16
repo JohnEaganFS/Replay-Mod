@@ -272,6 +272,20 @@ namespace PuckReplayMod
     }
 
     [Serializable]
+    public class GoalScoredPayload
+    {
+        public string Team;
+        public int BlueScore;
+        public int RedScore;
+        public PlayerSnapshotPayload Scorer;
+        public PlayerSnapshotPayload Assist;
+        public PlayerSnapshotPayload SecondAssist;
+        public ulong PuckNetworkObjectId;
+        public float PuckSpeed;
+        public float PuckShotSpeed;
+    }
+
+    [Serializable]
     public class PlayerLifecyclePayload
     {
         public PlayerSnapshotPayload Player;

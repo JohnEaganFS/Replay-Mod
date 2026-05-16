@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace PuckReplayMod
 {
@@ -26,6 +27,11 @@ namespace PuckReplayMod
         public bool HasScoreboard;
         public bool HasChat;
         public bool HasMarkers;
+        public bool HasGoals;
+        public int GoalCount;
+        public int MarkerCount;
+        public List<ReplayTimelineEntrySummary> TimelineEvents = new List<ReplayTimelineEntrySummary>();
+        public List<ReplayGameSegmentSummary> GameSegments = new List<ReplayGameSegmentSummary>();
         public bool IsFavorite;
         public bool IsMetadataComplete;
         public int SummaryCacheVersion;
@@ -70,8 +76,32 @@ namespace PuckReplayMod
         public bool HasScoreboard;
         public bool HasChat;
         public bool HasMarkers;
+        public bool HasGoals;
+        public int GoalCount;
+        public int MarkerCount;
+        public List<ReplayTimelineEntrySummary> TimelineEvents = new List<ReplayTimelineEntrySummary>();
+        public List<ReplayGameSegmentSummary> GameSegments = new List<ReplayGameSegmentSummary>();
         public bool IsFavorite;
         public long SummaryGeneratedUtcTicks;
         public string SummaryGeneratedByModVersion;
+    }
+
+    public class ReplayTimelineEntrySummary
+    {
+        public int Tick;
+        public string Type;
+        public string Team;
+        public string Label;
+        public string Tooltip;
+    }
+
+    public class ReplayGameSegmentSummary
+    {
+        public int Index;
+        public int StartTick;
+        public int EndTick;
+        public string Label;
+        public int BlueScore;
+        public int RedScore;
     }
 }

@@ -372,6 +372,7 @@ namespace PuckReplayMod
             EventManager.AddEventListener("Event_Everyone_OnPlayerNumberChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.AddEventListener("Event_Everyone_OnPlayerGoalsChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.AddEventListener("Event_Everyone_OnPlayerAssistsChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.AddEventListener("Event_Everyone_OnGoalScored", this.Event_Everyone_OnGoalScored);
             EventManager.AddEventListener("Event_Everyone_OnPlayerPositionChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.AddEventListener("Event_Everyone_OnPlayerPatreonLevelChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.AddEventListener("Event_Everyone_OnPlayerAdminLevelChanged", this.Event_Everyone_OnPlayerStateChanged);
@@ -399,6 +400,7 @@ namespace PuckReplayMod
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerNumberChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerGoalsChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerAssistsChanged", this.Event_Everyone_OnPlayerStateChanged);
+            EventManager.RemoveEventListener("Event_Everyone_OnGoalScored", this.Event_Everyone_OnGoalScored);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerPositionChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerPatreonLevelChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerAdminLevelChanged", this.Event_Everyone_OnPlayerStateChanged);
@@ -480,6 +482,17 @@ namespace PuckReplayMod
             }
 
             this.RecordEvent("PlayerState", this.BuildPlayerSnapshot(player));
+            this.RequestScoreboardSnapshot();
+        }
+
+        private void Event_Everyone_OnGoalScored(Dictionary<string, object> message)
+        {
+            if (!this.EnsureRecording("goal observed"))
+            {
+                return;
+            }
+
+            this.RecordEvent("GoalScored", this.BuildGoalScoredPayload(message));
             this.RequestScoreboardSnapshot();
         }
 
@@ -826,6 +839,64 @@ namespace PuckReplayMod
                 TrackInput = input.TrackInput.ServerValue,
                 LookInput = input.LookInput.ServerValue
             };
+        }
+
+        private GoalScoredPayload BuildGoalScoredPayload(Dictionary<string, object> message)
+        {
+            PlayerTeam byTeam = PlayerTeam.None;
+            if (message != null && message.ContainsKey("byTeam") && message["byTeam"] is PlayerTeam)
+            {
+                byTeam = (PlayerTeam)message["byTeam"];
+            }
+
+            Player scorer = message != null && message.ContainsKey("goalPlayer") ? message["goalPlayer"] as Player : null;
+            Player assist = message != null && message.ContainsKey("assistPlayer") ? message["assistPlayer"] as Player : null;
+            Player secondAssist = message != null && message.ContainsKey("secondAssistPlayer") ? message["secondAssistPlayer"] as Player : null;
+            Puck puck = message != null && message.ContainsKey("puck") ? message["puck"] as Puck : null;
+
+            int blueScore;
+            int redScore;
+            this.GetProjectedScoreAfterGoal(byTeam, out blueScore, out redScore);
+
+            return new GoalScoredPayload
+            {
+                Team = byTeam.ToString(),
+                BlueScore = blueScore,
+                RedScore = redScore,
+                Scorer = this.BuildOptionalPlayerSnapshot(scorer),
+                Assist = this.BuildOptionalPlayerSnapshot(assist),
+                SecondAssist = this.BuildOptionalPlayerSnapshot(secondAssist),
+                PuckNetworkObjectId = puck != null ? puck.NetworkObjectId : 0UL,
+                PuckSpeed = puck != null ? puck.Speed : 0f,
+                PuckShotSpeed = puck != null ? puck.ShotSpeed : 0f
+            };
+        }
+
+        private void GetProjectedScoreAfterGoal(PlayerTeam byTeam, out int blueScore, out int redScore)
+        {
+            GameManager gameManager = NetworkBehaviourSingleton<GameManager>.Instance;
+            if (gameManager == null || gameManager.GameState == null)
+            {
+                blueScore = 0;
+                redScore = 0;
+                return;
+            }
+
+            blueScore = gameManager.BlueScore;
+            redScore = gameManager.RedScore;
+            if (byTeam == PlayerTeam.Blue && gameManager.Phase != GamePhase.BlueScore)
+            {
+                blueScore++;
+            }
+            else if (byTeam == PlayerTeam.Red && gameManager.Phase != GamePhase.RedScore)
+            {
+                redScore++;
+            }
+        }
+
+        private PlayerSnapshotPayload BuildOptionalPlayerSnapshot(Player player)
+        {
+            return this.ShouldSkipPlayer(player) ? null : this.BuildPlayerSnapshot(player);
         }
 
         private PlayerSnapshotPayload BuildPlayerSnapshot(Player player)

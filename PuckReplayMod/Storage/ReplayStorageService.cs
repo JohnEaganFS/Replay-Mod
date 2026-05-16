@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -237,6 +238,10 @@ namespace PuckReplayMod
             {
                 FileInfo file = new FileInfo(replayPath);
                 ReplayHeaderDto header = session != null ? session.Header : null;
+                int goalCount;
+                int markerCount;
+                List<ReplayGameSegmentSummary> gameSegments;
+                List<ReplayTimelineEntrySummary> timelineEvents = ReplayTimelineIndexBuilder.Build(session, out goalCount, out markerCount, out gameSegments);
                 ReplaySummaryCache cache = new ReplaySummaryCache
                 {
                     FileName = file.Name,
@@ -260,6 +265,11 @@ namespace PuckReplayMod
                     HasScoreboard = header != null && header.HasScoreboard,
                     HasChat = header != null && header.HasChat,
                     HasMarkers = header != null && header.HasMarkers,
+                    HasGoals = goalCount > 0,
+                    GoalCount = goalCount,
+                    MarkerCount = markerCount,
+                    TimelineEvents = timelineEvents,
+                    GameSegments = gameSegments,
                     IsFavorite = false,
                     SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
                     SummaryGeneratedByModVersion = ReplayModConstants.ModVersion
@@ -323,6 +333,11 @@ namespace PuckReplayMod
                 HasScoreboard = false,
                 HasChat = false,
                 HasMarkers = false,
+                HasGoals = false,
+                GoalCount = 0,
+                MarkerCount = 0,
+                TimelineEvents = new List<ReplayTimelineEntrySummary>(),
+                GameSegments = new List<ReplayGameSegmentSummary>(),
                 IsFavorite = false,
                 SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
                 SummaryGeneratedByModVersion = ReplayModConstants.ModVersion

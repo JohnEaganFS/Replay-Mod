@@ -85,6 +85,10 @@ namespace PuckReplayMod
                 : this.ReadHeader(this.ReadRoot(filePath));
             FileInfo file = new FileInfo(filePath);
             ReplayFileSummary cachedSummary = this.TryReadSummaryCache(file, summaryDirectory);
+            int goalCount;
+            int markerCount;
+            List<ReplayGameSegmentSummary> gameSegments;
+            List<ReplayTimelineEntrySummary> timelineEvents = this.GetTimelineEvents(filePath, cachedSummary, out goalCount, out markerCount, out gameSegments);
             ReplayFileSummary summary = new ReplayFileSummary
             {
                 FilePath = filePath,
@@ -109,6 +113,11 @@ namespace PuckReplayMod
                 HasScoreboard = header.HasScoreboard,
                 HasChat = header.HasChat,
                 HasMarkers = header.HasMarkers,
+                HasGoals = goalCount > 0,
+                GoalCount = goalCount,
+                MarkerCount = markerCount,
+                TimelineEvents = timelineEvents,
+                GameSegments = gameSegments,
                 IsFavorite = cachedSummary != null && cachedSummary.IsFavorite,
                 IsMetadataComplete = true,
                 SummaryCacheVersion = ReplayModConstants.ReplaySummaryCacheVersion,
@@ -150,6 +159,11 @@ namespace PuckReplayMod
                 HasScoreboard = summary.HasScoreboard,
                 HasChat = summary.HasChat,
                 HasMarkers = summary.HasMarkers,
+                HasGoals = summary.HasGoals,
+                GoalCount = summary.GoalCount,
+                MarkerCount = summary.MarkerCount,
+                TimelineEvents = summary.TimelineEvents ?? new List<ReplayTimelineEntrySummary>(),
+                GameSegments = summary.GameSegments ?? new List<ReplayGameSegmentSummary>(),
                 IsFavorite = summary.IsFavorite,
                 SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
                 SummaryGeneratedByModVersion = ReplayModConstants.ModVersion
@@ -261,6 +275,11 @@ namespace PuckReplayMod
                 HasScoreboard = false,
                 HasChat = false,
                 HasMarkers = false,
+                HasGoals = false,
+                GoalCount = 0,
+                MarkerCount = 0,
+                TimelineEvents = new List<ReplayTimelineEntrySummary>(),
+                GameSegments = new List<ReplayGameSegmentSummary>(),
                 IsFavorite = false,
                 IsMetadataComplete = false,
                 SummaryCacheVersion = 0,
@@ -309,6 +328,11 @@ namespace PuckReplayMod
                 HasScoreboard = cache.HasScoreboard,
                 HasChat = cache.HasChat,
                 HasMarkers = cache.HasMarkers,
+                HasGoals = cache.HasGoals,
+                GoalCount = cache.GoalCount,
+                MarkerCount = cache.MarkerCount,
+                TimelineEvents = cache.TimelineEvents ?? new List<ReplayTimelineEntrySummary>(),
+                GameSegments = cache.GameSegments ?? new List<ReplayGameSegmentSummary>(),
                 IsFavorite = cache.IsFavorite,
                 IsMetadataComplete = true,
                 SummaryCacheVersion = cache.CacheVersion,
@@ -403,9 +427,38 @@ namespace PuckReplayMod
                     return payloadToken.ToObject<ChatMessagePayload>();
                 case "Marker":
                     return payloadToken.ToObject<MarkerPayload>();
+                case "GoalScored":
+                    return payloadToken.ToObject<GoalScoredPayload>();
                 default:
                     return payloadToken;
             }
+        }
+
+        private List<ReplayTimelineEntrySummary> GetTimelineEvents(string filePath, ReplayFileSummary cachedSummary, out int goalCount, out int markerCount, out List<ReplayGameSegmentSummary> gameSegments)
+        {
+            goalCount = cachedSummary != null ? cachedSummary.GoalCount : 0;
+            markerCount = cachedSummary != null ? cachedSummary.MarkerCount : 0;
+            gameSegments = cachedSummary != null && cachedSummary.GameSegments != null ? cachedSummary.GameSegments : new List<ReplayGameSegmentSummary>();
+            if (cachedSummary != null &&
+                cachedSummary.SummaryCacheVersion >= ReplayModConstants.ReplaySummaryCacheVersion &&
+                cachedSummary.TimelineEvents != null)
+            {
+                return cachedSummary.TimelineEvents;
+            }
+
+            try
+            {
+                ReplaySessionData session = this.Load(filePath);
+                return ReplayTimelineIndexBuilder.Build(session, out goalCount, out markerCount, out gameSegments);
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Failed to build replay timeline index for " + filePath + ": " + exception.Message);
+            }
+
+            return cachedSummary != null && cachedSummary.TimelineEvents != null
+                ? cachedSummary.TimelineEvents
+                : new List<ReplayTimelineEntrySummary>();
         }
     }
 }

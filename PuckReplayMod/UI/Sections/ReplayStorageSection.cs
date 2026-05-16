@@ -60,26 +60,47 @@ namespace PuckReplayMod
                 return;
             }
 
-            long totalBytes = 0L;
+            long totalBytes = ui.GetReplayStorageBytes();
             int replayCount = 0;
             if (Directory.Exists(ui.Storage.ReplaysDirectory))
             {
                 FileInfo[] files = new DirectoryInfo(ui.Storage.ReplaysDirectory).GetFiles("*" + ReplayModConstants.ReplayFileExtension);
                 replayCount = files.Length;
-                for (int i = 0; i < files.Length; i++)
-                {
-                    totalBytes += files[i].Length;
-                }
             }
 
             string limit = ui.Settings.StorageLimitMb <= 0 ? "unlimited" : ui.Settings.StorageLimitMb + " MB";
             string minimumLength = ui.Settings.MinimumReplayLengthSeconds <= 0 ? "any length" : ui.Settings.MinimumReplayLengthSeconds + " seconds";
+            string warning = GetStorageWarning(ui, totalBytes);
             ui.StorageUsageLabel.text =
                 "Stored replays: " + replayCount +
                 "\nDisk space used: " + ReplayUiTools.FormatBytes(totalBytes) +
                 "\nStorage limit: " + limit +
                 "\nReplay length kept: " + minimumLength +
+                warning +
                 "\nReplay folder: " + ui.Storage.ReplaysDirectory;
+        }
+
+        private static string GetStorageWarning(ReplayModUiService ui, long totalBytes)
+        {
+            if (ui.Settings.StorageLimitMb <= 0)
+            {
+                return string.Empty;
+            }
+
+            long limitBytes = (long)ui.Settings.StorageLimitMb * 1024L * 1024L;
+            if (limitBytes <= 0L)
+            {
+                return string.Empty;
+            }
+
+            float ratio = totalBytes / (float)limitBytes;
+            if (ratio < 0.8f)
+            {
+                return string.Empty;
+            }
+
+            int percent = Mathf.RoundToInt(ratio * 100f);
+            return "\nStorage warning: " + percent + "% used. Oldest replays will be cleaned up automatically after saves.";
         }
     }
 }

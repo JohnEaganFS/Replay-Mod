@@ -46,6 +46,7 @@ namespace PuckReplayMod
         public KeyCode ToggleStatusBadgeKey = KeyCode.F7;
         public KeyCode ToggleReplayTimeKey = KeyCode.F8;
         public KeyCode PlaybackUiInputKey = KeyCode.LeftAlt;
+        public KeyCode CaptureModeKey = KeyCode.F10;
         public ReplayPlaybackUiInputMode PlaybackUiInputMode = ReplayPlaybackUiInputMode.Toggle;
         public bool EnableLegacyImport = true;
         public bool EnableDebugProfiling = false;
@@ -58,9 +59,16 @@ namespace PuckReplayMod
         public bool ClearChatOnPlaybackStart = true;
         public float PlaybackThirdPersonCameraDistance = 4.25f;
         public float PlaybackFirstPersonFov = 90f;
+        public bool EnableSlowMotionInterpolation = true;
         public bool EnableFirstPersonCameraSmoothing = true;
         public float FirstPersonCameraSmoothingSpeed = 18f;
         public float ManagerUiScale = 1f;
+        public bool CaptureModeHidePlaybackControls = true;
+        public bool CaptureModeHideReplayOverlays = true;
+        public bool CaptureModeHideGameHud = true;
+        public bool CaptureModeHideChat = true;
+        public bool CaptureModeHideMinimap = true;
+        public bool CaptureModeHidePlayerNames = true;
 
         public static ReplayModSettings Load()
         {
@@ -82,9 +90,16 @@ namespace PuckReplayMod
                 ClearChatOnPlaybackStart = PlayerPrefs.GetInt(Prefix + "ClearChatOnPlaybackStart", 1) == 1,
                 PlaybackThirdPersonCameraDistance = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "PlaybackThirdPersonCameraDistance", 4.25f), 1.5f, 12f),
                 PlaybackFirstPersonFov = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "PlaybackFirstPersonFov", 90f), 60f, 120f),
+                EnableSlowMotionInterpolation = PlayerPrefs.GetInt(Prefix + "EnableSlowMotionInterpolation", 1) == 1,
                 EnableFirstPersonCameraSmoothing = PlayerPrefs.GetInt(Prefix + "EnableFirstPersonCameraSmoothing", 1) == 1,
                 FirstPersonCameraSmoothingSpeed = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "FirstPersonCameraSmoothingSpeed", 18f), 1f, 60f),
-                ManagerUiScale = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "ManagerUiScale", 1f), 0.85f, 1.3f)
+                ManagerUiScale = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "ManagerUiScale", 1f), 0.85f, 1.3f),
+                CaptureModeHidePlaybackControls = PlayerPrefs.GetInt(Prefix + "CaptureModeHidePlaybackControls", 1) == 1,
+                CaptureModeHideReplayOverlays = PlayerPrefs.GetInt(Prefix + "CaptureModeHideReplayOverlays", 1) == 1,
+                CaptureModeHideGameHud = PlayerPrefs.GetInt(Prefix + "CaptureModeHideGameHud", 1) == 1,
+                CaptureModeHideChat = PlayerPrefs.GetInt(Prefix + "CaptureModeHideChat", 1) == 1,
+                CaptureModeHideMinimap = PlayerPrefs.GetInt(Prefix + "CaptureModeHideMinimap", 1) == 1,
+                CaptureModeHidePlayerNames = PlayerPrefs.GetInt(Prefix + "CaptureModeHidePlayerNames", 1) == 1
             };
 
             string manualRecordingKey = PlayerPrefs.GetString(Prefix + "ManualRecordingKey", KeyCode.F5.ToString());
@@ -119,6 +134,12 @@ namespace PuckReplayMod
                 settings.PlaybackUiInputKey = parsed;
             }
 
+            string captureModeKey = PlayerPrefs.GetString(Prefix + "CaptureModeKey", KeyCode.F10.ToString());
+            if (Enum.TryParse(captureModeKey, true, out parsed))
+            {
+                settings.CaptureModeKey = parsed;
+            }
+
             settings.ShowStatusIndicator = PlayerPrefs.GetInt(Prefix + "ShowStatusIndicator", 1) == 1;
 
             return settings;
@@ -136,6 +157,7 @@ namespace PuckReplayMod
             PlayerPrefs.SetString(Prefix + "ToggleStatusBadgeKey", this.ToggleStatusBadgeKey.ToString());
             PlayerPrefs.SetString(Prefix + "ToggleReplayTimeKey", this.ToggleReplayTimeKey.ToString());
             PlayerPrefs.SetString(Prefix + "PlaybackUiInputKey", this.PlaybackUiInputKey.ToString());
+            PlayerPrefs.SetString(Prefix + "CaptureModeKey", this.CaptureModeKey.ToString());
             PlayerPrefs.SetString(Prefix + "PlaybackUiInputMode", this.PlaybackUiInputMode.ToString());
             PlayerPrefs.SetInt(Prefix + "EnableLegacyImport", this.EnableLegacyImport ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "EnableDebugProfiling", this.EnableDebugProfiling ? 1 : 0);
@@ -148,9 +170,16 @@ namespace PuckReplayMod
             PlayerPrefs.SetInt(Prefix + "ClearChatOnPlaybackStart", this.ClearChatOnPlaybackStart ? 1 : 0);
             PlayerPrefs.SetFloat(Prefix + "PlaybackThirdPersonCameraDistance", Mathf.Clamp(this.PlaybackThirdPersonCameraDistance, 1.5f, 12f));
             PlayerPrefs.SetFloat(Prefix + "PlaybackFirstPersonFov", Mathf.Clamp(this.PlaybackFirstPersonFov, 60f, 120f));
+            PlayerPrefs.SetInt(Prefix + "EnableSlowMotionInterpolation", this.EnableSlowMotionInterpolation ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "EnableFirstPersonCameraSmoothing", this.EnableFirstPersonCameraSmoothing ? 1 : 0);
             PlayerPrefs.SetFloat(Prefix + "FirstPersonCameraSmoothingSpeed", Mathf.Clamp(this.FirstPersonCameraSmoothingSpeed, 1f, 60f));
             PlayerPrefs.SetFloat(Prefix + "ManagerUiScale", Mathf.Clamp(this.ManagerUiScale, 0.85f, 1.3f));
+            PlayerPrefs.SetInt(Prefix + "CaptureModeHidePlaybackControls", this.CaptureModeHidePlaybackControls ? 1 : 0);
+            PlayerPrefs.SetInt(Prefix + "CaptureModeHideReplayOverlays", this.CaptureModeHideReplayOverlays ? 1 : 0);
+            PlayerPrefs.SetInt(Prefix + "CaptureModeHideGameHud", this.CaptureModeHideGameHud ? 1 : 0);
+            PlayerPrefs.SetInt(Prefix + "CaptureModeHideChat", this.CaptureModeHideChat ? 1 : 0);
+            PlayerPrefs.SetInt(Prefix + "CaptureModeHideMinimap", this.CaptureModeHideMinimap ? 1 : 0);
+            PlayerPrefs.SetInt(Prefix + "CaptureModeHidePlayerNames", this.CaptureModeHidePlayerNames ? 1 : 0);
             PlayerPrefs.Save();
         }
 

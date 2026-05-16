@@ -178,6 +178,16 @@ namespace PuckReplayMod
             return replayPlayer != null ? replayPlayer.Tick : 0;
         }
 
+        public static float GetInterpolationFraction(ReplayPlayer replayPlayer)
+        {
+            if (ControlledPlayer != replayPlayer || replayPlayer == null || IsPaused)
+            {
+                return 0f;
+            }
+
+            return Mathf.Clamp01(GetTickAccumulator());
+        }
+
         private static float GetTickAccumulator()
         {
             if (ControlledPlayer == null || TickAccumulatorField == null)

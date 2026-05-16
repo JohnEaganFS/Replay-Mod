@@ -21,12 +21,14 @@ namespace PuckReplayMod
         private readonly ReplayPlaybackService playback;
         private readonly List<Button> sectionButtons = new List<Button>();
         private readonly Dictionary<string, ulong> playbackCameraTargets = new Dictionary<string, ulong>();
+        private readonly Dictionary<VisualElement, StyleEnum<Visibility>> captureHiddenElements = new Dictionary<VisualElement, StyleEnum<Visibility>>();
         private readonly List<string> sectionNames = new List<string>
         {
             "Library",
             "Recording",
             "Hotkeys",
             "Display",
+            "Capture",
             "Storage",
             "Interface",
             "About",
@@ -37,12 +39,17 @@ namespace PuckReplayMod
         private VisualElement managerPanel;
         private VisualElement contentHost;
         private VisualElement content;
+        private VisualElement playbackControlsAnchor;
         private VisualElement playbackControlsPanel;
+        private VisualElement playbackTimelineTrack;
         private VisualElement playbackProgressBar;
+        private Label playbackTimelineTooltip;
         private Button playbackPlayPauseButton;
+        private Button playbackCaptureModeButton;
         private PlaybackPlayPauseIcon playbackPlayPauseIcon;
         private Label playbackTimeLabel;
         private PopupField<string> playbackSpeedDropdown;
+        private PopupField<string> playbackGameDropdown;
         private PopupField<string> playbackCameraModeDropdown;
         private PopupField<string> playbackCameraTargetDropdown;
         private Label statusLabel;
@@ -60,10 +67,21 @@ namespace PuckReplayMod
         private Task<ReplayUpdateCheckResult> updateCheckTask;
         private Label updateStatusLabel;
         private Button updateBadgeButton;
+        private Button storageBadgeButton;
         private ReplayUpdateStatus updateStatus = ReplayUpdateStatus.Unknown;
         private string updateStatusMessage = "Check whether a newer Replay Mod version is available.";
         private string updateDownloadUrl;
         private bool hasStartedAutomaticUpdateCheck;
+        private bool captureModeActive;
+        private Action heldPlaybackControlAction;
+        private float nextHeldPlaybackControlRealtime;
+        private bool suppressNextPlaybackControlClick;
+        private float suppressNextPlaybackControlClickUntil;
+        private string loadedPlaybackTimelineFilePath;
+        private readonly List<PlaybackTimelineMarkerData> playbackTimelineMarkers = new List<PlaybackTimelineMarkerData>();
+        private readonly Dictionary<string, ReplayGameSegmentSummary> playbackGameSegments = new Dictionary<string, ReplayGameSegmentSummary>();
+        private readonly Dictionary<string, VisualElement> playbackGameSegmentHighlights = new Dictionary<string, VisualElement>();
+        private string selectedPlaybackGameChoice = "Full replay";
 
         internal ReplayModSettings Settings { get { return this.settings; } }
         internal ClientReplayRecorder Recorder { get { return this.recorder; } }
@@ -76,6 +94,7 @@ namespace PuckReplayMod
         internal Label PlaybackLabel { get; set; }
         internal Label StatusLabel { get { return this.statusLabel; } }
         internal Label TimelineLabel { get { return this.timelineLabel; } }
+        internal bool CaptureModeActive { get { return this.captureModeActive; } }
 
         public ReplayModUiService(ReplayModSettings settings, ClientReplayRecorder recorder, ReplayStorageService storage, ReplayFileReader reader, ReplayPlaybackService playback)
         {
@@ -116,6 +135,7 @@ namespace PuckReplayMod
             EventManager.RemoveEventListener("Event_OnReplayManagerClickClose", this.Event_HideManager);
             this.recorder.RecordingStateChanged -= this.RefreshStatusIndicator;
             this.recorder.TickAdvanced -= this.RefreshStatusIndicator;
+            this.RestoreCaptureHiddenElements();
 
             if (this.root != null && this.root.parent != null)
             {
@@ -126,12 +146,17 @@ namespace PuckReplayMod
             this.managerPanel = null;
             this.contentHost = null;
             this.content = null;
+            this.playbackControlsAnchor = null;
             this.playbackControlsPanel = null;
+            this.playbackTimelineTrack = null;
             this.playbackProgressBar = null;
+            this.playbackTimelineTooltip = null;
             this.playbackPlayPauseButton = null;
+            this.playbackCaptureModeButton = null;
             this.playbackPlayPauseIcon = null;
             this.playbackTimeLabel = null;
             this.playbackSpeedDropdown = null;
+            this.playbackGameDropdown = null;
             this.playbackCameraModeDropdown = null;
             this.playbackCameraTargetDropdown = null;
             this.playbackCameraTargets.Clear();
@@ -139,27 +164,38 @@ namespace PuckReplayMod
             this.timelineLabel = null;
             this.playbackUiInputActive = false;
             this.playbackUiMouseRequiredApplied = false;
+            this.loadedPlaybackTimelineFilePath = null;
+            this.playbackTimelineMarkers.Clear();
+            this.playbackGameSegments.Clear();
+            this.playbackGameSegmentHighlights.Clear();
+            this.selectedPlaybackGameChoice = "Full replay";
             this.ReplayList = null;
             this.StorageLabel = null;
             this.StorageUsageLabel = null;
             this.PlaybackLabel = null;
             this.updateStatusLabel = null;
             this.updateBadgeButton = null;
+            this.storageBadgeButton = null;
             this.sectionButtons.Clear();
             this.isManagerVisible = false;
             this.isMainMenuVisible = true;
             this.mainMenuButtonAttached = false;
             this.pauseMenuButtonAttached = false;
+            this.captureModeActive = false;
         }
 
         public void Tick()
         {
             this.PollManagerCloseHotkey();
             this.PollPlaybackUiInputHotkey();
+            this.PollCaptureModeHotkey();
             this.PollDisplayHotkeys();
+            this.PollHeldPlaybackControl();
             this.RefreshStatusIndicator();
             this.RefreshPlaybackStatus();
+            this.ResetCaptureModeWhenPlaybackEnds();
             this.RefreshPlaybackControls();
+            this.ApplyCaptureModeVisibility();
             this.TickReplayLibraryIndex();
             this.PollUpdateCheck();
         }
@@ -195,12 +231,17 @@ namespace PuckReplayMod
                 this.managerPanel = null;
                 this.contentHost = null;
                 this.content = null;
+                this.playbackControlsAnchor = null;
                 this.playbackControlsPanel = null;
+                this.playbackTimelineTrack = null;
                 this.playbackProgressBar = null;
+                this.playbackTimelineTooltip = null;
                 this.playbackPlayPauseButton = null;
+                this.playbackCaptureModeButton = null;
                 this.playbackPlayPauseIcon = null;
                 this.playbackTimeLabel = null;
                 this.playbackSpeedDropdown = null;
+                this.playbackGameDropdown = null;
                 this.playbackCameraModeDropdown = null;
                 this.playbackCameraTargetDropdown = null;
                 this.playbackCameraTargets.Clear();
@@ -208,12 +249,19 @@ namespace PuckReplayMod
                 this.timelineLabel = null;
                 this.playbackUiInputActive = false;
                 this.playbackUiMouseRequiredApplied = false;
+                this.loadedPlaybackTimelineFilePath = null;
+                this.playbackTimelineMarkers.Clear();
+                this.playbackGameSegments.Clear();
+                this.playbackGameSegmentHighlights.Clear();
+                this.selectedPlaybackGameChoice = "Full replay";
                 this.ReplayList = null;
                 this.StorageLabel = null;
                 this.StorageUsageLabel = null;
                 this.PlaybackLabel = null;
                 this.updateStatusLabel = null;
                 this.updateBadgeButton = null;
+                this.storageBadgeButton = null;
+                this.RestoreCaptureHiddenElements();
                 this.sectionButtons.Clear();
                 this.isManagerVisible = false;
                 this.mainMenuButtonAttached = false;
@@ -300,6 +348,7 @@ namespace PuckReplayMod
         internal void RefreshStorageUsage()
         {
             ReplayStorageSection.RefreshStorageUsage(this);
+            this.RefreshStorageBadge();
         }
 
         internal void PlayReplay(string filePath)
@@ -508,16 +557,17 @@ namespace PuckReplayMod
                 return;
             }
 
-            bool shouldShow = this.playback != null && this.playback.IsPlaybackActive && !this.isManagerVisible;
+            bool shouldShow = this.playback != null && this.playback.IsPlaybackActive && !this.isManagerVisible && !this.IsCaptureModeHidingPlaybackControls();
             this.playbackControlsPanel.style.display = shouldShow ? DisplayStyle.Flex : DisplayStyle.None;
             if (!shouldShow)
             {
                 if (this.playback == null || !this.playback.IsPlaybackActive)
                 {
                     this.playbackUiInputActive = false;
-                    this.SetPlaybackUiMouseRequired(false);
+                    this.ClearPlaybackTimelineMarkers();
                 }
 
+                this.SetPlaybackUiMouseRequired(false);
                 return;
             }
 
@@ -532,6 +582,7 @@ namespace PuckReplayMod
 
             int currentTick = Math.Max(0, this.playback.CurrentTick);
             int totalTicks = Math.Max(currentTick, this.playback.TotalTicks);
+            this.RefreshPlaybackTimelineMarkers(totalTicks);
             if (this.playbackPlayPauseIcon != null)
             {
                 this.playbackPlayPauseIcon.SetMode(this.playback.IsPaused ? PlaybackPlayPauseIconMode.Play : PlaybackPlayPauseIconMode.Pause);
@@ -542,13 +593,25 @@ namespace PuckReplayMod
                 this.playbackTimeLabel.text = this.FormatPlaybackTime(currentTick) + " / " + this.FormatPlaybackTime(totalTicks);
             }
 
+            if (this.playbackCaptureModeButton != null)
+            {
+                this.playbackCaptureModeButton.text = this.GetPlaybackCaptureModeButtonText();
+            }
+
             if (this.playbackProgressBar != null)
             {
                 float percent = totalTicks > 0 ? Mathf.Clamp01(currentTick / (float)totalTicks) * 100f : 0f;
                 this.playbackProgressBar.style.width = new StyleLength(new Length(percent, LengthUnit.Percent));
             }
 
+            this.RefreshPlaybackGameSegmentHighlight(totalTicks);
+
             bool shouldSyncDropdowns = !this.IsPlaybackDropdownInteractionActive();
+            if (this.playbackGameDropdown != null && shouldSyncDropdowns && this.playbackGameDropdown.value != this.selectedPlaybackGameChoice)
+            {
+                this.playbackGameDropdown.SetValueWithoutNotify(this.selectedPlaybackGameChoice);
+            }
+
             if (this.playbackSpeedDropdown != null && shouldSyncDropdowns)
             {
                 string speedText = FormatSpeed(this.playback.PlaybackSpeed);
@@ -585,22 +648,512 @@ namespace PuckReplayMod
                 return;
             }
 
-            float width = target.contentRect.width;
-            if (width <= 0f)
+            float normalized;
+            string positionDebug;
+            if (!this.TryGetPlaybackTimelineNormalizedPosition(evt.position, target, out normalized, out positionDebug))
             {
+                this.LogPlaybackUiDebug("Ignored playback timeline pointer down with invalid coordinates: " + positionDebug, false);
                 return;
             }
 
-            float normalized = Mathf.Clamp01(evt.localPosition.x / width);
-            this.playback.SeekToTick(Mathf.RoundToInt(this.playback.TotalTicks * normalized));
+            int maxPlayableTick = Math.Max(0, this.playback.TotalTicks - 2);
+            int targetTick = Mathf.Clamp(Mathf.RoundToInt(maxPlayableTick * normalized), 0, maxPlayableTick);
+            this.LogPlaybackUiDebug(
+                "Playback timeline seek: normalized=" + normalized.ToString("0.000", CultureInfo.InvariantCulture) +
+                ", targetTick=" + targetTick +
+                ", currentTick=" + this.playback.CurrentTick +
+                ", totalTicks=" + this.playback.TotalTicks +
+                ", " + positionDebug,
+                false);
+            this.SelectPlaybackGameForTick(targetTick);
+            this.playback.SeekToTick(targetTick);
             this.RefreshPlaybackControls();
             this.RefreshPlaybackStatus();
             evt.StopPropagation();
         }
 
+        private void OnPlaybackTimelinePointerMove(PointerMoveEvent evt)
+        {
+            if (this.playbackTimelineTrack == null || this.playbackTimelineTooltip == null)
+            {
+                this.HidePlaybackTimelineTooltip();
+                return;
+            }
+
+            float width = this.playbackTimelineTrack.contentRect.width;
+            if (width <= 0f)
+            {
+                this.HidePlaybackTimelineTooltip();
+                return;
+            }
+
+            float normalized;
+            string positionDebug;
+            if (!this.TryGetPlaybackTimelineNormalizedPosition(evt.position, this.playbackTimelineTrack, out normalized, out positionDebug))
+            {
+                this.HidePlaybackTimelineTooltip();
+                return;
+            }
+
+            float pointerX = Mathf.Clamp(normalized * width, 0f, width);
+            PlaybackTimelineMarkerData nearest = null;
+            float nearestDistance = 10f;
+            for (int i = 0; i < this.playbackTimelineMarkers.Count; i++)
+            {
+                PlaybackTimelineMarkerData marker = this.playbackTimelineMarkers[i];
+                float markerX = marker.NormalizedTick * width;
+                float distance = Mathf.Abs(pointerX - markerX);
+                if (distance <= nearestDistance)
+                {
+                    nearest = marker;
+                    nearestDistance = distance;
+                }
+            }
+
+            if (nearest == null)
+            {
+                ReplayGameSegmentSummary segment = this.GetPlaybackGameSegmentAtNormalizedPosition(width > 0f ? pointerX / width : 0f);
+                if (segment == null)
+                {
+                    this.HidePlaybackTimelineTooltip();
+                    return;
+                }
+
+                this.ShowPlaybackTimelineTooltip(this.GetPlaybackGameSegmentTooltip(segment), pointerX);
+                return;
+            }
+
+            this.ShowPlaybackTimelineTooltip(nearest.Tooltip, pointerX);
+        }
+
+        private void ShowPlaybackTimelineTooltip(string text, float pointerX)
+        {
+            if (this.playbackTimelineTooltip == null || this.playbackTimelineTrack == null || this.playbackControlsPanel == null)
+            {
+                return;
+            }
+
+            this.playbackTimelineTooltip.text = text ?? string.Empty;
+            this.playbackTimelineTooltip.style.display = DisplayStyle.Flex;
+            float tooltipWidth = this.playbackTimelineTooltip.resolvedStyle.width > 0f ? this.playbackTimelineTooltip.resolvedStyle.width : 180f;
+            float trackLeft = this.playbackTimelineTrack.worldBound.xMin - this.playbackControlsPanel.worldBound.xMin;
+            float left = Mathf.Clamp(trackLeft + pointerX - tooltipWidth * 0.5f, 4f, Mathf.Max(4f, this.playbackControlsPanel.contentRect.width - tooltipWidth - 4f));
+            this.playbackTimelineTooltip.style.left = left;
+        }
+
+        private void OnPlaybackTimelinePointerLeave(PointerLeaveEvent evt)
+        {
+            this.HidePlaybackTimelineTooltip();
+        }
+
+        private bool TryGetPlaybackTimelineNormalizedPosition(Vector3 panelPosition, VisualElement timelineTrack, out float normalized, out string debug)
+        {
+            normalized = 0f;
+            debug = "track unavailable";
+            if (timelineTrack == null)
+            {
+                return false;
+            }
+
+            Rect worldBound = timelineTrack.worldBound;
+            float width = worldBound.width > 0f ? worldBound.width : timelineTrack.contentRect.width;
+            if (width <= 0f)
+            {
+                debug = "track width=" + width.ToString("0.00", CultureInfo.InvariantCulture);
+                return false;
+            }
+
+            float localX = panelPosition.x - worldBound.xMin;
+            float rawNormalized = localX / width;
+            debug = "panelX=" + panelPosition.x.ToString("0.00", CultureInfo.InvariantCulture) +
+                ", trackLeft=" + worldBound.xMin.ToString("0.00", CultureInfo.InvariantCulture) +
+                ", trackWidth=" + width.ToString("0.00", CultureInfo.InvariantCulture) +
+                ", localX=" + localX.ToString("0.00", CultureInfo.InvariantCulture) +
+                ", rawNormalized=" + rawNormalized.ToString("0.000", CultureInfo.InvariantCulture);
+
+            if (float.IsNaN(rawNormalized) || float.IsInfinity(rawNormalized) || rawNormalized < -0.05f || rawNormalized > 1.05f)
+            {
+                return false;
+            }
+
+            normalized = Mathf.Clamp01(rawNormalized);
+            return true;
+        }
+
+        private void HidePlaybackTimelineTooltip()
+        {
+            if (this.playbackTimelineTooltip != null)
+            {
+                this.playbackTimelineTooltip.style.display = DisplayStyle.None;
+            }
+        }
+
+        private void RefreshPlaybackTimelineMarkers(int totalTicks)
+        {
+            if (this.playbackTimelineTrack == null || this.playback == null || !this.playback.IsPlaybackActive || totalTicks <= 0)
+            {
+                this.ClearPlaybackTimelineMarkers();
+                return;
+            }
+
+            string filePath = this.playback.CurrentFilePath;
+            if (string.IsNullOrEmpty(filePath))
+            {
+                this.ClearPlaybackTimelineMarkers();
+                return;
+            }
+
+            if (string.Equals(this.loadedPlaybackTimelineFilePath, filePath, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            this.ClearPlaybackTimelineMarkers();
+            this.loadedPlaybackTimelineFilePath = filePath;
+            this.playbackTimelineMarkers.Clear();
+
+            try
+            {
+                ReplayFileSummary summary = this.reader.ReadSummary(filePath, this.storage.SummariesDirectory);
+                if (summary == null)
+                {
+                    return;
+                }
+
+                this.RefreshPlaybackGameDropdown(summary);
+                this.RebuildPlaybackGameSegmentHighlights(totalTicks);
+                if (summary.TimelineEvents == null || summary.TimelineEvents.Count == 0)
+                {
+                    return;
+                }
+
+                for (int i = 0; i < summary.TimelineEvents.Count; i++)
+                {
+                    ReplayTimelineEntrySummary entry = summary.TimelineEvents[i];
+                    if (entry == null)
+                    {
+                        continue;
+                    }
+
+                    VisualElement marker = this.CreatePlaybackTimelineMarker(entry, totalTicks);
+                    Color markerColor = GetPlaybackTimelineMarkerColor(entry);
+                    this.playbackTimelineTrack.Add(marker);
+                    this.playbackTimelineMarkers.Add(new PlaybackTimelineMarkerData(
+                        Math.Max(0, entry.Tick),
+                        Mathf.Clamp01(entry.Tick / (float)totalTicks),
+                        this.GetPlaybackTimelineMarkerTooltip(entry),
+                        marker,
+                        markerColor));
+                }
+
+                this.RefreshPlaybackTimelineMarkerEmphasis();
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Failed to load playback timeline markers: " + exception.Message);
+            }
+        }
+
+        private void RefreshPlaybackGameDropdown(ReplayFileSummary summary)
+        {
+            if (this.playbackGameDropdown == null)
+            {
+                return;
+            }
+
+            this.playbackGameSegments.Clear();
+            List<string> choices = new List<string>
+            {
+                "Full replay"
+            };
+
+            if (summary != null && summary.GameSegments != null)
+            {
+                for (int i = 0; i < summary.GameSegments.Count; i++)
+                {
+                    ReplayGameSegmentSummary segment = summary.GameSegments[i];
+                    if (segment == null || segment.EndTick <= segment.StartTick)
+                    {
+                        continue;
+                    }
+
+                    string label = string.IsNullOrEmpty(segment.Label) ? "Game " + segment.Index : segment.Label;
+                    if (this.playbackGameSegments.ContainsKey(label))
+                    {
+                        label = label + " #" + segment.Index;
+                    }
+
+                    this.playbackGameSegments[label] = segment;
+                    choices.Add(label);
+                }
+            }
+
+            this.playbackGameDropdown.choices = choices;
+            if (!choices.Contains(this.selectedPlaybackGameChoice))
+            {
+                this.selectedPlaybackGameChoice = "Full replay";
+            }
+
+            this.playbackGameDropdown.SetValueWithoutNotify(this.selectedPlaybackGameChoice);
+            this.playbackGameDropdown.SetEnabled(choices.Count > 1);
+        }
+
+        private void RefreshPlaybackGameSegmentHighlight(int totalTicks)
+        {
+            if (totalTicks <= 0 || this.playbackGameSegmentHighlights.Count == 0)
+            {
+                return;
+            }
+
+            bool hasSelectedGame = this.selectedPlaybackGameChoice != "Full replay" && this.playbackGameSegments.ContainsKey(this.selectedPlaybackGameChoice);
+            foreach (KeyValuePair<string, VisualElement> entry in this.playbackGameSegmentHighlights)
+            {
+                if (entry.Value == null)
+                {
+                    continue;
+                }
+
+                bool isSelected = hasSelectedGame && entry.Key == this.selectedPlaybackGameChoice;
+                entry.Value.style.backgroundColor = isSelected
+                    ? new Color(0.42f, 0.68f, 1f, 0.36f)
+                    : new Color(0.42f, 0.62f, 0.95f, hasSelectedGame ? 0.13f : 0.22f);
+                entry.Value.style.display = DisplayStyle.Flex;
+            }
+
+            this.RefreshPlaybackTimelineMarkerEmphasis();
+        }
+
+        private void RebuildPlaybackGameSegmentHighlights(int totalTicks)
+        {
+            this.ClearPlaybackGameSegmentHighlights();
+            if (this.playbackTimelineTrack == null || totalTicks <= 0)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<string, ReplayGameSegmentSummary> entry in this.playbackGameSegments)
+            {
+                ReplayGameSegmentSummary segment = entry.Value;
+                if (segment == null || segment.EndTick <= segment.StartTick)
+                {
+                    continue;
+                }
+
+                float startPercent = Mathf.Clamp01(segment.StartTick / (float)totalTicks) * 100f;
+                float endPercent = Mathf.Clamp01(segment.EndTick / (float)totalTicks) * 100f;
+                VisualElement highlight = new VisualElement
+                {
+                    name = "PuckReplayModPlaybackGameSegmentHighlight"
+                };
+                highlight.style.position = Position.Absolute;
+                highlight.style.top = 0f;
+                highlight.style.bottom = 0f;
+                highlight.style.left = new StyleLength(new Length(startPercent, LengthUnit.Percent));
+                highlight.style.width = new StyleLength(new Length(Mathf.Max(0.5f, endPercent - startPercent), LengthUnit.Percent));
+                highlight.style.backgroundColor = new Color(0.42f, 0.62f, 0.95f, 0.22f);
+                highlight.pickingMode = PickingMode.Ignore;
+                this.playbackTimelineTrack.Add(highlight);
+                this.playbackGameSegmentHighlights[entry.Key] = highlight;
+            }
+
+            this.RefreshPlaybackGameSegmentHighlight(totalTicks);
+        }
+
+        private void ClearPlaybackGameSegmentHighlights()
+        {
+            if (this.playbackTimelineTrack != null)
+            {
+                for (int i = this.playbackTimelineTrack.childCount - 1; i >= 0; i--)
+                {
+                    VisualElement child = this.playbackTimelineTrack.ElementAt(i);
+                    if (child != null && child.name == "PuckReplayModPlaybackGameSegmentHighlight")
+                    {
+                        this.playbackTimelineTrack.Remove(child);
+                    }
+                }
+            }
+
+            this.playbackGameSegmentHighlights.Clear();
+        }
+
+        private VisualElement CreatePlaybackTimelineMarker(ReplayTimelineEntrySummary entry, int totalTicks)
+        {
+            float percent = totalTicks > 0 ? Mathf.Clamp01(entry.Tick / (float)totalTicks) * 100f : 0f;
+            VisualElement marker = new VisualElement
+            {
+                name = "PuckReplayModPlaybackTimelineMarker"
+            };
+            marker.style.position = Position.Absolute;
+            marker.style.left = new StyleLength(new Length(percent, LengthUnit.Percent));
+            marker.style.top = 3f;
+            marker.style.bottom = 3f;
+            marker.style.width = 5f;
+            marker.style.marginLeft = -2.5f;
+            marker.style.backgroundColor = GetPlaybackTimelineMarkerColor(entry);
+            marker.style.borderTopLeftRadius = 2f;
+            marker.style.borderTopRightRadius = 2f;
+            marker.style.borderBottomLeftRadius = 2f;
+            marker.style.borderBottomRightRadius = 2f;
+            marker.tooltip = this.GetPlaybackTimelineMarkerTooltip(entry);
+            marker.pickingMode = PickingMode.Ignore;
+            return marker;
+        }
+
+        private void ClearPlaybackTimelineMarkers()
+        {
+            this.loadedPlaybackTimelineFilePath = null;
+            this.playbackTimelineMarkers.Clear();
+            this.playbackGameSegments.Clear();
+            this.playbackGameSegmentHighlights.Clear();
+            this.selectedPlaybackGameChoice = "Full replay";
+            this.HidePlaybackTimelineTooltip();
+            this.ClearPlaybackGameSegmentHighlights();
+            if (this.playbackGameDropdown != null)
+            {
+                this.playbackGameDropdown.choices = new List<string> { "Full replay" };
+                this.playbackGameDropdown.SetValueWithoutNotify("Full replay");
+                this.playbackGameDropdown.SetEnabled(false);
+            }
+
+            if (this.playbackTimelineTrack == null)
+            {
+                return;
+            }
+
+            for (int i = this.playbackTimelineTrack.childCount - 1; i >= 0; i--)
+            {
+                VisualElement child = this.playbackTimelineTrack.ElementAt(i);
+                if (child != null && child.name == "PuckReplayModPlaybackTimelineMarker")
+                {
+                    this.playbackTimelineTrack.Remove(child);
+                }
+            }
+        }
+
+        private static Color GetPlaybackTimelineMarkerColor(ReplayTimelineEntrySummary entry)
+        {
+            if (entry != null && entry.Type == "Goal")
+            {
+                if (entry.Team == "Blue")
+                {
+                    return new Color(0.18f, 0.56f, 1f, 1f);
+                }
+
+                if (entry.Team == "Red")
+                {
+                    return new Color(1f, 0.22f, 0.18f, 1f);
+                }
+
+                return new Color(0.95f, 0.95f, 0.95f, 1f);
+            }
+
+            if (entry != null && entry.Type == "PeriodStart")
+            {
+                return new Color(0.62f, 0.92f, 0.62f, 1f);
+            }
+
+            if (entry != null && entry.Type == "PeriodEnd")
+            {
+                return new Color(0.78f, 0.78f, 0.86f, 1f);
+            }
+
+            return new Color(1f, 0.82f, 0.18f, 1f);
+        }
+
+        private string GetPlaybackTimelineMarkerTooltip(ReplayTimelineEntrySummary entry)
+        {
+            if (entry == null)
+            {
+                return string.Empty;
+            }
+
+            string label = !string.IsNullOrEmpty(entry.Tooltip) ? entry.Tooltip : (string.IsNullOrEmpty(entry.Label) ? entry.Type : entry.Label);
+            return label + " - " + this.FormatPlaybackTime(Math.Max(0, entry.Tick));
+        }
+
+        private ReplayGameSegmentSummary GetPlaybackGameSegmentAtNormalizedPosition(float normalized)
+        {
+            if (this.playback == null || this.playback.TotalTicks <= 0)
+            {
+                return null;
+            }
+
+            int tick = Mathf.RoundToInt(Mathf.Clamp01(normalized) * this.playback.TotalTicks);
+            foreach (ReplayGameSegmentSummary segment in this.playbackGameSegments.Values)
+            {
+                if (segment != null && tick >= segment.StartTick && tick <= segment.EndTick)
+                {
+                    return segment;
+                }
+            }
+
+            return null;
+        }
+
+        private string GetPlaybackGameSegmentTooltip(ReplayGameSegmentSummary segment)
+        {
+            if (segment == null)
+            {
+                return string.Empty;
+            }
+
+            string label = string.IsNullOrEmpty(segment.Label) ? "Game " + segment.Index : segment.Label;
+            return label + " - " + this.FormatPlaybackTime(Math.Max(0, segment.StartTick)) + " to " + this.FormatPlaybackTime(Math.Max(0, segment.EndTick));
+        }
+
+        private void RefreshPlaybackTimelineMarkerEmphasis()
+        {
+            bool hasSelectedGame = this.selectedPlaybackGameChoice != "Full replay" && this.playbackGameSegments.ContainsKey(this.selectedPlaybackGameChoice);
+            ReplayGameSegmentSummary selectedSegment = null;
+            if (hasSelectedGame)
+            {
+                this.playbackGameSegments.TryGetValue(this.selectedPlaybackGameChoice, out selectedSegment);
+            }
+
+            for (int i = 0; i < this.playbackTimelineMarkers.Count; i++)
+            {
+                PlaybackTimelineMarkerData marker = this.playbackTimelineMarkers[i];
+                if (marker == null || marker.Element == null)
+                {
+                    continue;
+                }
+
+                bool isInsideSelectedGame = selectedSegment != null && marker.Tick >= selectedSegment.StartTick && marker.Tick <= selectedSegment.EndTick;
+                float alpha = !hasSelectedGame || isInsideSelectedGame ? marker.BaseColor.a : 0.28f;
+                marker.Element.style.backgroundColor = new Color(marker.BaseColor.r, marker.BaseColor.g, marker.BaseColor.b, alpha);
+            }
+        }
+
+        private sealed class PlaybackTimelineMarkerData
+        {
+            public PlaybackTimelineMarkerData(int tick, float normalizedTick, string tooltip, VisualElement element, Color baseColor)
+            {
+                this.Tick = tick;
+                this.NormalizedTick = normalizedTick;
+                this.Tooltip = tooltip ?? string.Empty;
+                this.Element = element;
+                this.BaseColor = baseColor;
+            }
+
+            public int Tick { get; private set; }
+
+            public float NormalizedTick { get; private set; }
+
+            public string Tooltip { get; private set; }
+
+            public VisualElement Element { get; private set; }
+
+            public Color BaseColor { get; private set; }
+        }
+
         private bool IsPlaybackControlInputAllowed()
         {
             if (this.playback == null || !this.playback.IsPlaybackActive || this.isManagerVisible)
+            {
+                return false;
+            }
+
+            if (this.IsCaptureModeHidingPlaybackControls())
             {
                 return false;
             }
@@ -631,6 +1184,49 @@ namespace PuckReplayMod
 
             this.playback.SetPlaybackSpeed(speed);
             this.RefreshPlaybackControls();
+        }
+
+        private void OnPlaybackGameChanged(string value)
+        {
+            if (this.playback == null || string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            this.selectedPlaybackGameChoice = value;
+            ReplayGameSegmentSummary segment;
+            if (this.playbackGameSegments.TryGetValue(value, out segment) && segment != null)
+            {
+                this.playback.SeekToTick(Math.Max(0, segment.StartTick));
+            }
+
+            this.RefreshPlaybackControls();
+            this.RefreshPlaybackStatus();
+        }
+
+        private void SelectPlaybackGameForTick(int tick)
+        {
+            string selected = "Full replay";
+            foreach (KeyValuePair<string, ReplayGameSegmentSummary> entry in this.playbackGameSegments)
+            {
+                ReplayGameSegmentSummary segment = entry.Value;
+                if (segment == null)
+                {
+                    continue;
+                }
+
+                if (tick >= segment.StartTick && tick <= segment.EndTick)
+                {
+                    selected = entry.Key;
+                    break;
+                }
+            }
+
+            this.selectedPlaybackGameChoice = selected;
+            if (this.playbackGameDropdown != null && this.playbackGameDropdown.value != selected)
+            {
+                this.playbackGameDropdown.SetValueWithoutNotify(selected);
+            }
         }
 
         private void OnPlaybackCameraModeChanged(string value)
@@ -785,7 +1381,7 @@ namespace PuckReplayMod
                 return;
             }
 
-            if (!this.settings.ShowPlaybackTimeline || !this.playback.IsPlaying)
+            if (!this.settings.ShowPlaybackTimeline || !this.playback.IsPlaying || this.IsCaptureModeHidingReplayOverlays())
             {
                 this.timelineLabel.style.display = DisplayStyle.None;
                 return;
@@ -804,7 +1400,7 @@ namespace PuckReplayMod
                 return;
             }
 
-            if (!this.settings.ShowStatusIndicator || this.isMainMenuVisible)
+            if (!this.settings.ShowStatusIndicator || this.isMainMenuVisible || this.IsCaptureModeHidingReplayOverlays())
             {
                 this.statusLabel.style.display = DisplayStyle.None;
                 return;
@@ -940,17 +1536,28 @@ namespace PuckReplayMod
 
         private void CreatePlaybackControlsPanel()
         {
+            this.playbackControlsAnchor = new VisualElement
+            {
+                name = "PuckReplayModPlaybackControlsAnchor"
+            };
+            this.playbackControlsAnchor.style.position = Position.Absolute;
+            this.playbackControlsAnchor.style.left = 0f;
+            this.playbackControlsAnchor.style.right = 0f;
+            this.playbackControlsAnchor.style.bottom = 22f;
+            this.playbackControlsAnchor.style.height = 86f;
+            this.playbackControlsAnchor.style.flexDirection = FlexDirection.Row;
+            this.playbackControlsAnchor.style.alignItems = Align.Center;
+            this.playbackControlsAnchor.style.justifyContent = Justify.Center;
+            this.playbackControlsAnchor.pickingMode = PickingMode.Ignore;
+
             this.playbackControlsPanel = new VisualElement
             {
                 name = "PuckReplayModPlaybackControls"
             };
-            this.playbackControlsPanel.style.position = Position.Absolute;
-            this.playbackControlsPanel.style.left = new StyleLength(new Length(50f, LengthUnit.Percent));
-            this.playbackControlsPanel.style.bottom = 22f;
-            this.playbackControlsPanel.style.translate = new Translate(new Length(-50f, LengthUnit.Percent), 0f);
+            this.playbackControlsPanel.style.position = Position.Relative;
             this.playbackControlsPanel.style.width = new StyleLength(new Length(76f, LengthUnit.Percent));
-            this.playbackControlsPanel.style.maxWidth = 1040f;
-            this.playbackControlsPanel.style.minWidth = 700f;
+            this.playbackControlsPanel.style.maxWidth = 1180f;
+            this.playbackControlsPanel.style.minWidth = 820f;
             this.playbackControlsPanel.style.height = 86f;
             this.playbackControlsPanel.style.minHeight = 86f;
             this.playbackControlsPanel.style.flexDirection = FlexDirection.Column;
@@ -973,10 +1580,13 @@ namespace PuckReplayMod
             {
                 name = "PuckReplayModPlaybackScrubTrack"
             };
+            this.playbackTimelineTrack = timelineTrack;
             timelineTrack.style.flexGrow = 1f;
             timelineTrack.style.height = 28f;
             timelineTrack.style.backgroundColor = new Color(0.22f, 0.24f, 0.26f, 1f);
             timelineTrack.RegisterCallback<PointerDownEvent>(this.OnPlaybackTimelinePointerDown);
+            timelineTrack.RegisterCallback<PointerMoveEvent>(this.OnPlaybackTimelinePointerMove);
+            timelineTrack.RegisterCallback<PointerLeaveEvent>(this.OnPlaybackTimelinePointerLeave);
 
             this.playbackProgressBar = new VisualElement
             {
@@ -993,6 +1603,25 @@ namespace PuckReplayMod
             scrubRow.Add(timelineTrack);
             this.playbackControlsPanel.Add(scrubRow);
 
+            this.playbackTimelineTooltip = new Label();
+            this.playbackTimelineTooltip.style.position = Position.Absolute;
+            this.playbackTimelineTooltip.style.bottom = 92f;
+            this.playbackTimelineTooltip.style.left = 0f;
+            this.playbackTimelineTooltip.style.display = DisplayStyle.None;
+            this.playbackTimelineTooltip.style.backgroundColor = new Color(0.02f, 0.025f, 0.03f, 0.96f);
+            this.playbackTimelineTooltip.style.color = Color.white;
+            this.playbackTimelineTooltip.style.fontSize = 12f;
+            this.playbackTimelineTooltip.style.paddingLeft = 8f;
+            this.playbackTimelineTooltip.style.paddingRight = 8f;
+            this.playbackTimelineTooltip.style.paddingTop = 4f;
+            this.playbackTimelineTooltip.style.paddingBottom = 4f;
+            this.playbackTimelineTooltip.style.borderTopLeftRadius = 3f;
+            this.playbackTimelineTooltip.style.borderTopRightRadius = 3f;
+            this.playbackTimelineTooltip.style.borderBottomLeftRadius = 3f;
+            this.playbackTimelineTooltip.style.borderBottomRightRadius = 3f;
+            this.playbackTimelineTooltip.pickingMode = PickingMode.Ignore;
+            this.playbackControlsPanel.Add(this.playbackTimelineTooltip);
+
             VisualElement controlsRow = new VisualElement();
             controlsRow.style.flexDirection = FlexDirection.Row;
             controlsRow.style.alignItems = Align.Center;
@@ -1004,6 +1633,7 @@ namespace PuckReplayMod
             stopButton.style.height = 32f;
             stopButton.style.minHeight = 32f;
             stopButton.style.marginRight = 6f;
+            this.CenterPlaybackTextButton(stopButton);
             controlsRow.Add(stopButton);
 
             this.playbackPlayPauseButton = ReplayUiTools.CreateButton(string.Empty, this.OnPlaybackPlayPauseClicked);
@@ -1030,7 +1660,7 @@ namespace PuckReplayMod
             });
             controlsRow.Add(this.playbackPlayPauseButton);
 
-            Button backFiveButton = this.CreatePlaybackControlButton("seek-backward-5.svg", 24f, 46f, delegate
+            Button backFiveButton = this.CreatePlaybackControlButton("seek-backward-5.svg", 24f, 46f, false, delegate
             {
                 this.playback.SeekRelativeSeconds(-5f);
                 this.RefreshPlaybackControls();
@@ -1039,7 +1669,7 @@ namespace PuckReplayMod
             backFiveButton.tooltip = "Back 5 seconds";
             controlsRow.Add(backFiveButton);
 
-            Button backTickButton = this.CreatePlaybackControlButton("frame-previous.svg", 20f, 38f, delegate
+            Button backTickButton = this.CreatePlaybackControlButton("frame-previous.svg", 20f, 38f, true, delegate
             {
                 this.playback.SeekRelativeTicks(-1);
                 this.RefreshPlaybackControls();
@@ -1058,7 +1688,7 @@ namespace PuckReplayMod
             this.playbackTimeLabel.style.marginRight = 8f;
             controlsRow.Add(this.playbackTimeLabel);
 
-            Button forwardTickButton = this.CreatePlaybackControlButton("frame-next.svg", 20f, 38f, delegate
+            Button forwardTickButton = this.CreatePlaybackControlButton("frame-next.svg", 20f, 38f, true, delegate
             {
                 this.playback.SeekRelativeTicks(1);
                 this.RefreshPlaybackControls();
@@ -1067,7 +1697,7 @@ namespace PuckReplayMod
             forwardTickButton.tooltip = "Forward 1 replay tick";
             controlsRow.Add(forwardTickButton);
 
-            Button forwardFiveButton = this.CreatePlaybackControlButton("seek-forward-5.svg", 24f, 46f, delegate
+            Button forwardFiveButton = this.CreatePlaybackControlButton("seek-forward-5.svg", 24f, 46f, false, delegate
             {
                 this.playback.SeekRelativeSeconds(5f);
                 this.RefreshPlaybackControls();
@@ -1075,6 +1705,32 @@ namespace PuckReplayMod
             });
             forwardFiveButton.tooltip = "Forward 5 seconds";
             controlsRow.Add(forwardFiveButton);
+
+            this.playbackCaptureModeButton = ReplayUiTools.CreateButton(this.GetPlaybackCaptureModeButtonText(), delegate
+            {
+                this.SetCaptureModeActive(!this.captureModeActive);
+            });
+            this.playbackCaptureModeButton.style.width = 122f;
+            this.playbackCaptureModeButton.style.minWidth = 122f;
+            this.playbackCaptureModeButton.style.maxWidth = 122f;
+            this.playbackCaptureModeButton.style.height = 32f;
+            this.playbackCaptureModeButton.style.minHeight = 32f;
+            this.playbackCaptureModeButton.style.marginLeft = 8f;
+            this.playbackCaptureModeButton.tooltip = "Toggle clean-screen Capture Mode for recording clips.";
+            this.CenterPlaybackTextButton(this.playbackCaptureModeButton);
+            controlsRow.Add(this.playbackCaptureModeButton);
+
+            this.playbackGameDropdown = ReplayUiTools.CreateDropdown(new List<string>
+            {
+                "Full replay"
+            }, "Full replay", this.OnPlaybackGameChanged);
+            this.playbackGameDropdown.style.width = 132f;
+            this.playbackGameDropdown.style.minWidth = 132f;
+            this.playbackGameDropdown.style.maxWidth = 132f;
+            this.playbackGameDropdown.style.marginLeft = 8f;
+            this.playbackGameDropdown.tooltip = "Game section";
+            this.RegisterPlaybackDropdownDebugCallbacks(this.playbackGameDropdown, "game");
+            controlsRow.Add(this.playbackGameDropdown);
 
             this.playbackSpeedDropdown = ReplayUiTools.CreateDropdown(new List<string>
             {
@@ -1120,13 +1776,25 @@ namespace PuckReplayMod
 
             this.playbackControlsPanel.Add(controlsRow);
 
-            this.root.Add(this.playbackControlsPanel);
+            this.playbackControlsAnchor.Add(this.playbackControlsPanel);
+            this.root.Add(this.playbackControlsAnchor);
         }
 
-        private Button CreatePlaybackControlButton(string iconFileName, float iconSize, float width, Action action)
+        private Button CreatePlaybackControlButton(string iconFileName, float iconSize, float width, bool repeatOnHold, Action action)
         {
             Button button = ReplayUiTools.CreateButton(string.Empty, delegate
             {
+                if (this.suppressNextPlaybackControlClick)
+                {
+                    if (Time.realtimeSinceStartup <= this.suppressNextPlaybackControlClickUntil)
+                    {
+                        this.suppressNextPlaybackControlClick = false;
+                        return;
+                    }
+
+                    this.suppressNextPlaybackControlClick = false;
+                }
+
                 if (!this.IsPlaybackControlInputAllowed())
                 {
                     return;
@@ -1156,7 +1824,103 @@ namespace PuckReplayMod
             {
                 ReplayUiTools.SetSvgIconColor(icon, Color.white);
             });
+
+            if (repeatOnHold)
+            {
+                button.RegisterCallback<PointerDownEvent>(delegate(PointerDownEvent evt)
+                {
+                    this.BeginHeldPlaybackControl(action);
+                    evt.StopPropagation();
+                }, TrickleDown.TrickleDown);
+
+                button.RegisterCallback<PointerUpEvent>(delegate
+                {
+                    this.EndHeldPlaybackControl(action);
+                }, TrickleDown.TrickleDown);
+
+                button.RegisterCallback<PointerCancelEvent>(delegate
+                {
+                    this.EndHeldPlaybackControl(action);
+                }, TrickleDown.TrickleDown);
+
+                button.RegisterCallback<PointerLeaveEvent>(delegate
+                {
+                    this.EndHeldPlaybackControl(action);
+                }, TrickleDown.TrickleDown);
+
+                button.RegisterCallback<DetachFromPanelEvent>(delegate
+                {
+                    this.EndHeldPlaybackControl(action);
+                });
+            }
+
             return button;
+        }
+
+        private void BeginHeldPlaybackControl(Action action)
+        {
+            if (action == null || !this.IsPlaybackControlInputAllowed())
+            {
+                return;
+            }
+
+            this.heldPlaybackControlAction = action;
+            this.nextHeldPlaybackControlRealtime = Time.realtimeSinceStartup + 0.28f;
+            this.suppressNextPlaybackControlClick = true;
+            this.suppressNextPlaybackControlClickUntil = Time.realtimeSinceStartup + 0.5f;
+            this.LogPlaybackUiDebug("Held playback control started.", false);
+            action();
+        }
+
+        private void EndHeldPlaybackControl(Action action)
+        {
+            if (this.heldPlaybackControlAction == action)
+            {
+                this.heldPlaybackControlAction = null;
+                this.suppressNextPlaybackControlClick = true;
+                this.suppressNextPlaybackControlClickUntil = Time.realtimeSinceStartup + 0.15f;
+                this.LogPlaybackUiDebug("Held playback control ended.", false);
+            }
+        }
+
+        private void PollHeldPlaybackControl()
+        {
+            if (this.heldPlaybackControlAction == null)
+            {
+                return;
+            }
+
+            if (!this.IsPlaybackControlInputAllowed())
+            {
+                this.heldPlaybackControlAction = null;
+                return;
+            }
+
+            float realtime = Time.realtimeSinceStartup;
+            if (realtime < this.nextHeldPlaybackControlRealtime)
+            {
+                return;
+            }
+
+            this.nextHeldPlaybackControlRealtime = realtime + 0.08f;
+            this.LogPlaybackUiDebug("Held playback control repeat.", true);
+            this.heldPlaybackControlAction();
+        }
+
+        private void CenterPlaybackTextButton(Button button)
+        {
+            if (button == null)
+            {
+                return;
+            }
+
+            button.style.alignItems = Align.Center;
+            button.style.justifyContent = Justify.Center;
+            button.style.unityTextAlign = TextAnchor.MiddleCenter;
+            button.style.paddingLeft = 0f;
+            button.style.paddingRight = 0f;
+            button.style.paddingTop = 0f;
+            button.style.paddingBottom = 0f;
         }
 
         private void OnPlaybackControlsPointerDown(PointerDownEvent evt)
@@ -1182,6 +1946,7 @@ namespace PuckReplayMod
             {
                 this.ExtendPlaybackDropdownInteractionWindow();
                 this.LogPlaybackUiDebug("Dropdown pointer down (" + name + "): " + this.GetPlaybackInputDebugState(evt), false);
+                this.SchedulePlaybackDropdownGeometryDiagnostics(dropdown, name);
             }, TrickleDown.TrickleDown);
 
             dropdown.RegisterCallback<FocusInEvent>(delegate
@@ -1200,7 +1965,181 @@ namespace PuckReplayMod
             {
                 this.ExtendPlaybackDropdownInteractionWindow();
                 this.LogPlaybackUiDebug("Dropdown changed (" + name + "): " + evt.previousValue + " -> " + evt.newValue + ".", false);
+                this.SchedulePlaybackDropdownGeometryDiagnostics(dropdown, name);
             });
+        }
+
+        private void SchedulePlaybackDropdownGeometryDiagnostics(PopupField<string> dropdown, string name)
+        {
+            if (this.settings == null || !this.settings.EnableDebugProfiling || dropdown == null)
+            {
+                return;
+            }
+
+            dropdown.schedule.Execute((Action)delegate
+            {
+                this.LogPlaybackDropdownGeometry(dropdown, name, "2ms");
+            }).ExecuteLater(2L);
+
+            dropdown.schedule.Execute((Action)delegate
+            {
+                this.LogPlaybackDropdownGeometry(dropdown, name, "40ms");
+            }).ExecuteLater(40L);
+
+            dropdown.schedule.Execute((Action)delegate
+            {
+                this.LogPlaybackDropdownGeometry(dropdown, name, "120ms");
+            }).ExecuteLater(120L);
+        }
+
+        private void LogPlaybackDropdownGeometry(PopupField<string> dropdown, string name, string phase)
+        {
+            if (this.settings == null || !this.settings.EnableDebugProfiling || dropdown == null)
+            {
+                return;
+            }
+
+            IPanel panel = dropdown.panel;
+            VisualElement visualTree = panel != null ? panel.visualTree : null;
+            VisualElement popup = this.FindClosestDropdownPopup(visualTree, dropdown.worldBound);
+            VisualElement popupInner = this.FindClosestDropdownInner(visualTree, dropdown.worldBound);
+            Rect dropdownRect = dropdown.worldBound;
+            Rect popupRect = popup != null ? popup.worldBound : default(Rect);
+            Rect popupInnerRect = popupInner != null ? popupInner.worldBound : default(Rect);
+            float verticalGap = popupInner != null ? GetVerticalGap(dropdownRect, popupInnerRect) : -1f;
+            bool suspicious = popupInner == null || verticalGap > 24f;
+
+            ReplayModLog.Info(
+                "[Playback UI Dropdown Diagnostics] " +
+                "name=" + name +
+                ", phase=" + phase +
+                ", suspicious=" + suspicious +
+                ", value=" + dropdown.value +
+                ", dropdown=" + FormatRect(dropdownRect) +
+                ", popup=" + (popup != null ? FormatRect(popupRect) : "none") +
+                ", inner=" + (popupInner != null ? FormatRect(popupInnerRect) : "none") +
+                ", verticalGap=" + verticalGap.ToString("0.0", CultureInfo.InvariantCulture) +
+                ", items=" + FormatDropdownItemRects(popupInner) +
+                ", anchor=" + FormatElementRect(this.playbackControlsAnchor) +
+                ", panel=" + FormatElementRect(this.playbackControlsPanel) +
+                ", root=" + FormatElementRect(this.root) +
+                ", managerVisible=" + this.isManagerVisible +
+                ", captureMode=" + this.captureModeActive +
+                ", uiInputActive=" + this.playbackUiInputActive +
+                ", mouseRequired=" + this.playbackUiMouseRequiredApplied);
+        }
+
+        private VisualElement FindClosestDropdownPopup(VisualElement visualTree, Rect dropdownRect)
+        {
+            if (visualTree == null)
+            {
+                return null;
+            }
+
+            VisualElement closest = null;
+            float closestDistance = float.MaxValue;
+            foreach (VisualElement popup in visualTree.Query<VisualElement>(null, "unity-base-dropdown").Build())
+            {
+                if (popup == null)
+                {
+                    continue;
+                }
+
+                float distance = Mathf.Abs(GetRectCenterX(popup.worldBound) - GetRectCenterX(dropdownRect)) +
+                    Mathf.Abs(GetRectCenterY(popup.worldBound) - GetRectCenterY(dropdownRect));
+                if (distance < closestDistance)
+                {
+                    closestDistance = distance;
+                    closest = popup;
+                }
+            }
+
+            return closest;
+        }
+
+        private VisualElement FindClosestDropdownInner(VisualElement visualTree, Rect dropdownRect)
+        {
+            if (visualTree == null)
+            {
+                return null;
+            }
+
+            VisualElement closest = null;
+            float closestDistance = float.MaxValue;
+            foreach (VisualElement inner in visualTree.Query<VisualElement>(null, "unity-base-dropdown__container-inner").Build())
+            {
+                if (inner == null)
+                {
+                    continue;
+                }
+
+                Rect rect = inner.worldBound;
+                float distance = Mathf.Abs(GetRectCenterX(rect) - GetRectCenterX(dropdownRect)) +
+                    Mathf.Abs(GetRectCenterY(rect) - GetRectCenterY(dropdownRect));
+                if (distance < closestDistance)
+                {
+                    closestDistance = distance;
+                    closest = inner;
+                }
+            }
+
+            return closest;
+        }
+
+        private static string FormatDropdownItemRects(VisualElement popupInner)
+        {
+            if (popupInner == null)
+            {
+                return "none";
+            }
+
+            List<VisualElement> items = popupInner.Query<VisualElement>(null, "unity-base-dropdown__item").Build().ToList();
+            if (items.Count == 0)
+            {
+                return "0";
+            }
+
+            return items.Count +
+                ",first=" + FormatRect(items[0].worldBound) +
+                ",last=" + FormatRect(items[items.Count - 1].worldBound);
+        }
+
+        private static float GetVerticalGap(Rect first, Rect second)
+        {
+            if (second.yMin > first.yMax)
+            {
+                return second.yMin - first.yMax;
+            }
+
+            if (first.yMin > second.yMax)
+            {
+                return first.yMin - second.yMax;
+            }
+
+            return 0f;
+        }
+
+        private static float GetRectCenterX(Rect rect)
+        {
+            return rect.xMin + rect.width * 0.5f;
+        }
+
+        private static float GetRectCenterY(Rect rect)
+        {
+            return rect.yMin + rect.height * 0.5f;
+        }
+
+        private static string FormatElementRect(VisualElement element)
+        {
+            return element != null ? FormatRect(element.worldBound) : "none";
+        }
+
+        private static string FormatRect(Rect rect)
+        {
+            return "x=" + rect.x.ToString("0.0", CultureInfo.InvariantCulture) +
+                ",y=" + rect.y.ToString("0.0", CultureInfo.InvariantCulture) +
+                ",w=" + rect.width.ToString("0.0", CultureInfo.InvariantCulture) +
+                ",h=" + rect.height.ToString("0.0", CultureInfo.InvariantCulture);
         }
 
         private void ExtendPlaybackDropdownInteractionWindow()
@@ -1255,6 +2194,7 @@ namespace PuckReplayMod
                 return;
             }
 
+            this.SetCaptureModeActive(false);
             this.playback.Close();
             this.RefreshPlaybackControls();
             this.RefreshPlaybackStatus();
@@ -1445,9 +2385,29 @@ namespace PuckReplayMod
             });
             headerActions.Add(this.updateBadgeButton);
 
+            this.storageBadgeButton = ReplayUiTools.CreateButton("STORAGE 0%", delegate
+            {
+                this.ShowSection("Storage");
+            });
+            this.storageBadgeButton.style.height = 32f;
+            this.storageBadgeButton.style.minHeight = 32f;
+            this.storageBadgeButton.style.marginRight = 10f;
+            this.storageBadgeButton.style.paddingLeft = 10f;
+            this.storageBadgeButton.style.paddingRight = 10f;
+            this.storageBadgeButton.style.fontSize = 13f;
+            this.storageBadgeButton.style.backgroundColor = new StyleColor(new Color(0.86f, 0.66f, 0.18f, 1f));
+            this.storageBadgeButton.style.color = Color.black;
+            this.storageBadgeButton.style.display = DisplayStyle.None;
+            this.storageBadgeButton.RegisterCallback<MouseLeaveEvent>(delegate
+            {
+                this.RefreshStorageBadge();
+            });
+            headerActions.Add(this.storageBadgeButton);
+
             headerActions.Add(this.CreateVanillaCloseButton());
             this.managerPanel.Add(header);
             this.RefreshUpdateBadge();
+            this.RefreshStorageBadge();
         }
 
         private VisualElement CreateVanillaCloseButton()
@@ -1579,6 +2539,10 @@ namespace PuckReplayMod
             {
                 ReplayOverlaySettingsSection.Create(this, this.content);
             }
+            else if (sectionName == "Capture")
+            {
+                ReplayCaptureSettingsSection.Create(this, this.content);
+            }
             else if (sectionName == "Storage")
             {
                 ReplayStorageSection.Create(this, this.content);
@@ -1675,6 +2639,59 @@ namespace PuckReplayMod
                 ? new Color(0.9f, 0.28f, 0.2f, 1f)
                 : new Color(0.86f, 0.66f, 0.18f, 1f));
             this.updateBadgeButton.style.color = Color.black;
+        }
+
+        private void RefreshStorageBadge()
+        {
+            if (this.storageBadgeButton == null)
+            {
+                return;
+            }
+
+            if (this.settings == null || this.settings.StorageLimitMb <= 0 || this.storage == null)
+            {
+                this.storageBadgeButton.style.display = DisplayStyle.None;
+                return;
+            }
+
+            long usedBytes = this.GetReplayStorageBytes();
+            long limitBytes = (long)this.settings.StorageLimitMb * 1024L * 1024L;
+            if (limitBytes <= 0L)
+            {
+                this.storageBadgeButton.style.display = DisplayStyle.None;
+                return;
+            }
+
+            float ratio = usedBytes / (float)limitBytes;
+            bool critical = ratio >= 0.95f;
+            bool warning = ratio >= 0.8f;
+            int percent = Mathf.RoundToInt(ratio * 100f);
+            this.storageBadgeButton.style.display = DisplayStyle.Flex;
+            this.storageBadgeButton.text = "STORAGE " + percent + "%";
+            this.storageBadgeButton.tooltip =
+                "Replay storage is at " + percent + "% of the configured " + this.settings.StorageLimitMb +
+                " MB limit. Oldest replays are cleaned up automatically after saves.";
+            this.storageBadgeButton.style.backgroundColor = new StyleColor(critical
+                ? new Color(0.9f, 0.28f, 0.2f, 1f)
+                : (warning ? new Color(0.86f, 0.66f, 0.18f, 1f) : new Color(0.24f, 0.58f, 0.32f, 1f)));
+            this.storageBadgeButton.style.color = Color.black;
+        }
+
+        internal long GetReplayStorageBytes()
+        {
+            if (this.storage == null || string.IsNullOrEmpty(this.storage.ReplaysDirectory) || !Directory.Exists(this.storage.ReplaysDirectory))
+            {
+                return 0L;
+            }
+
+            long totalBytes = 0L;
+            FileInfo[] files = new DirectoryInfo(this.storage.ReplaysDirectory).GetFiles("*" + ReplayModConstants.ReplayFileExtension);
+            for (int i = 0; i < files.Length; i++)
+            {
+                totalBytes += files[i].Length;
+            }
+
+            return totalBytes;
         }
 
         private static ReplayUpdateCheckResult CheckForUpdatesCore()
@@ -1857,6 +2874,7 @@ namespace PuckReplayMod
             this.managerPanel.pickingMode = PickingMode.Position;
             this.ShowSection(this.selectedSection);
             this.RefreshPlaybackControls();
+            this.RefreshStorageBadge();
             this.StartAutomaticUpdateCheck();
 
             try
@@ -1963,6 +2981,18 @@ namespace PuckReplayMod
                 return;
             }
 
+            if (this.IsCaptureModeHidingPlaybackControls())
+            {
+                if (this.playbackUiInputActive)
+                {
+                    this.playbackUiInputActive = false;
+                    this.RefreshPlaybackControls();
+                }
+
+                this.SetPlaybackUiMouseRequired(false);
+                return;
+            }
+
             bool previous = this.playbackUiInputActive;
             if (this.settings.PlaybackUiInputMode == ReplayPlaybackUiInputMode.Hold)
             {
@@ -1978,6 +3008,157 @@ namespace PuckReplayMod
                 this.LogPlaybackUiDebug("Playback UI input active changed: " + previous + " -> " + this.playbackUiInputActive + ".", false);
                 this.RefreshPlaybackControls();
             }
+        }
+
+        private void PollCaptureModeHotkey()
+        {
+            if (this.settings == null)
+            {
+                return;
+            }
+
+            if (!this.IsKeyPressed(this.settings.CaptureModeKey))
+            {
+                return;
+            }
+
+            this.SetCaptureModeActive(!this.captureModeActive);
+        }
+
+        private void ResetCaptureModeWhenPlaybackEnds()
+        {
+            if (!this.captureModeActive || this.playback == null || this.playback.IsPlaybackActive)
+            {
+                return;
+            }
+
+            this.SetCaptureModeActive(false);
+        }
+
+        private string GetPlaybackCaptureModeButtonText()
+        {
+            string keyText = this.settings != null ? FormatKey(this.settings.CaptureModeKey) : "F10";
+            return (this.captureModeActive ? "Show UI" : "Hide UI") + " (" + keyText + ")";
+        }
+
+        internal void SetCaptureModeActive(bool isActive)
+        {
+            if (this.captureModeActive == isActive)
+            {
+                return;
+            }
+
+            this.captureModeActive = isActive;
+            if (this.captureModeActive && this.settings != null && this.settings.CaptureModeHidePlaybackControls)
+            {
+                this.playbackUiInputActive = false;
+                this.SetPlaybackUiMouseRequired(false);
+            }
+
+            if (!this.captureModeActive)
+            {
+                this.RestoreCaptureHiddenElements();
+            }
+
+            this.RefreshStatusIndicator();
+            this.RefreshTimelineIndicator();
+            this.RefreshPlaybackControls();
+            this.ApplyCaptureModeVisibility();
+        }
+
+        internal void RefreshCaptureModeVisibility()
+        {
+            this.RestoreCaptureHiddenElements();
+            this.RefreshStatusIndicator();
+            this.RefreshTimelineIndicator();
+            this.RefreshPlaybackControls();
+            this.ApplyCaptureModeVisibility();
+        }
+
+        private bool IsCaptureModeApplicable()
+        {
+            return this.captureModeActive && this.playback != null && this.playback.IsPlaybackActive && !this.isManagerVisible;
+        }
+
+        private bool IsCaptureModeHidingPlaybackControls()
+        {
+            return this.IsCaptureModeApplicable() && this.settings != null && this.settings.CaptureModeHidePlaybackControls;
+        }
+
+        private bool IsCaptureModeHidingReplayOverlays()
+        {
+            return this.IsCaptureModeApplicable() && this.settings != null && this.settings.CaptureModeHideReplayOverlays;
+        }
+
+        private void ApplyCaptureModeVisibility()
+        {
+            if (!this.IsCaptureModeApplicable() || this.settings == null)
+            {
+                this.RestoreCaptureHiddenElements();
+                return;
+            }
+
+            UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
+            if (uiManager == null)
+            {
+                return;
+            }
+
+            if (this.settings.CaptureModeHideGameHud)
+            {
+                this.HideForCapture(uiManager.GameState != null ? uiManager.GameState.View : null);
+                this.HideForCapture(uiManager.Hud != null ? uiManager.Hud.View : null);
+                this.HideForCapture(uiManager.Scoreboard != null ? uiManager.Scoreboard.View : null);
+            }
+
+            if (this.settings.CaptureModeHideChat)
+            {
+                this.HideForCapture(uiManager.Chat != null ? uiManager.Chat.View : null);
+            }
+
+            if (this.settings.CaptureModeHideMinimap)
+            {
+                this.HideForCapture(uiManager.Minimap != null ? uiManager.Minimap.View : null);
+            }
+
+            if (this.settings.CaptureModeHidePlayerNames)
+            {
+                this.HideForCapture(uiManager.PlayerUsernames != null ? uiManager.PlayerUsernames.View : null);
+                this.HideForCapture(uiManager.Announcements != null ? uiManager.Announcements.View : null);
+            }
+        }
+
+        private void HideForCapture(VisualElement element)
+        {
+            if (element == null)
+            {
+                return;
+            }
+
+            if (!this.captureHiddenElements.ContainsKey(element))
+            {
+                this.captureHiddenElements[element] = element.style.visibility;
+            }
+
+            element.style.visibility = Visibility.Hidden;
+        }
+
+        private void RestoreCaptureHiddenElements()
+        {
+            if (this.captureHiddenElements.Count == 0)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<VisualElement, StyleEnum<Visibility>> entry in this.captureHiddenElements)
+            {
+                if (entry.Key != null)
+                {
+                    entry.Key.style.visibility = entry.Value;
+                }
+            }
+
+            this.captureHiddenElements.Clear();
         }
 
         private void SetPlaybackUiMouseRequired(bool isRequired)
@@ -2074,6 +3255,27 @@ namespace PuckReplayMod
             }
 
             return false;
+        }
+
+        private static string FormatKey(KeyCode keyCode)
+        {
+            switch (keyCode)
+            {
+                case KeyCode.LeftAlt:
+                    return "Left Alt";
+                case KeyCode.RightAlt:
+                    return "Right Alt";
+                case KeyCode.LeftControl:
+                    return "Left Ctrl";
+                case KeyCode.RightControl:
+                    return "Right Ctrl";
+                case KeyCode.LeftShift:
+                    return "Left Shift";
+                case KeyCode.RightShift:
+                    return "Right Shift";
+                default:
+                    return keyCode.ToString();
+            }
         }
 
         private void Event_HideManager(Dictionary<string, object> message)
