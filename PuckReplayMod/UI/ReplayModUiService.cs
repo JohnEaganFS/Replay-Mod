@@ -17,6 +17,7 @@ namespace PuckReplayMod
         private readonly ReplayFileReader reader;
         private readonly ReplayPlaybackService playback;
         private readonly List<Button> sectionButtons = new List<Button>();
+        private readonly Dictionary<string, ulong> playbackCameraTargets = new Dictionary<string, ulong>();
         private readonly List<string> sectionNames = new List<string>
         {
             "Library",
@@ -24,6 +25,7 @@ namespace PuckReplayMod
             "Hotkeys",
             "Display",
             "Storage",
+            "Interface",
             "Advanced"
         };
 
@@ -37,6 +39,8 @@ namespace PuckReplayMod
         private PlaybackPlayPauseIcon playbackPlayPauseIcon;
         private Label playbackTimeLabel;
         private PopupField<string> playbackSpeedDropdown;
+        private PopupField<string> playbackCameraModeDropdown;
+        private PopupField<string> playbackCameraTargetDropdown;
         private Label statusLabel;
         private Label timelineLabel;
         private bool isManagerVisible;
@@ -47,6 +51,8 @@ namespace PuckReplayMod
         private bool isMainMenuVisible = true;
         private string selectedSection = "Library";
         private float nextReplayIndexRealtime;
+        private float playbackDropdownInteractionUntil;
+        private float nextPlaybackUiDebugRealtime;
 
         internal ReplayModSettings Settings { get { return this.settings; } }
         internal ClientReplayRecorder Recorder { get { return this.recorder; } }
@@ -115,6 +121,9 @@ namespace PuckReplayMod
             this.playbackPlayPauseIcon = null;
             this.playbackTimeLabel = null;
             this.playbackSpeedDropdown = null;
+            this.playbackCameraModeDropdown = null;
+            this.playbackCameraTargetDropdown = null;
+            this.playbackCameraTargets.Clear();
             this.statusLabel = null;
             this.timelineLabel = null;
             this.playbackUiInputActive = false;
@@ -178,6 +187,9 @@ namespace PuckReplayMod
                 this.playbackPlayPauseIcon = null;
                 this.playbackTimeLabel = null;
                 this.playbackSpeedDropdown = null;
+                this.playbackCameraModeDropdown = null;
+                this.playbackCameraTargetDropdown = null;
+                this.playbackCameraTargets.Clear();
                 this.statusLabel = null;
                 this.timelineLabel = null;
                 this.playbackUiInputActive = false;
@@ -434,7 +446,7 @@ namespace PuckReplayMod
             }
 
             bool controlsInteractive = this.playbackUiInputActive;
-            this.SetPlaybackControlsPickingMode(this.playbackControlsPanel, PickingMode.Position);
+            this.playbackControlsPanel.pickingMode = PickingMode.Position;
             if (this.playbackProgressBar != null)
             {
                 this.playbackProgressBar.pickingMode = PickingMode.Ignore;
@@ -460,7 +472,8 @@ namespace PuckReplayMod
                 this.playbackProgressBar.style.width = new StyleLength(new Length(percent, LengthUnit.Percent));
             }
 
-            if (this.playbackSpeedDropdown != null)
+            bool shouldSyncDropdowns = !this.IsPlaybackDropdownInteractionActive();
+            if (this.playbackSpeedDropdown != null && shouldSyncDropdowns)
             {
                 string speedText = FormatSpeed(this.playback.PlaybackSpeed);
                 if (this.playbackSpeedDropdown.value != speedText)
@@ -468,12 +481,24 @@ namespace PuckReplayMod
                     this.playbackSpeedDropdown.SetValueWithoutNotify(speedText);
                 }
             }
+
+            if (this.playbackCameraModeDropdown != null && shouldSyncDropdowns)
+            {
+                string cameraModeText = FormatCameraMode(this.playback.CameraMode);
+                if (this.playbackCameraModeDropdown.value != cameraModeText)
+                {
+                    this.playbackCameraModeDropdown.SetValueWithoutNotify(cameraModeText);
+                }
+            }
+
+            this.RefreshPlaybackCameraTargetDropdown(shouldSyncDropdowns);
         }
 
         private void OnPlaybackTimelinePointerDown(PointerDownEvent evt)
         {
             if (!this.IsPlaybackControlInputAllowed())
             {
+                this.LogPlaybackUiDebug("Blocked playback timeline pointer down: " + this.GetPlaybackInputDebugState(evt), true);
                 evt.StopImmediatePropagation();
                 return;
             }
@@ -532,6 +557,35 @@ namespace PuckReplayMod
             this.RefreshPlaybackControls();
         }
 
+        private void OnPlaybackCameraModeChanged(string value)
+        {
+            if (this.playback == null)
+            {
+                return;
+            }
+
+            this.playback.SetCameraMode(ParseCameraMode(value));
+            this.RefreshPlaybackControls();
+            this.RefreshPlaybackCameraTargetDropdown(true);
+        }
+
+        private void OnPlaybackCameraTargetChanged(string value)
+        {
+            if (this.playback == null || string.IsNullOrEmpty(value))
+            {
+                return;
+            }
+
+            ulong ownerClientId;
+            if (!this.playbackCameraTargets.TryGetValue(value, out ownerClientId))
+            {
+                this.playback.SetCameraTarget(null);
+                return;
+            }
+
+            this.playback.SetCameraTarget(ownerClientId);
+        }
+
         private static string FormatSpeed(float speed)
         {
             if (Math.Abs(speed - 1f) < 0.01f)
@@ -540,6 +594,112 @@ namespace PuckReplayMod
             }
 
             return speed.ToString("0.##", CultureInfo.InvariantCulture) + "x";
+        }
+
+        private static string FormatCameraMode(ReplayPlaybackCameraMode mode)
+        {
+            if (mode == ReplayPlaybackCameraMode.FirstPerson)
+            {
+                return "1st person";
+            }
+
+            if (mode == ReplayPlaybackCameraMode.ThirdPerson)
+            {
+                return "3rd person";
+            }
+
+            return "Free";
+        }
+
+        private static ReplayPlaybackCameraMode ParseCameraMode(string value)
+        {
+            if (string.Equals(value, "1st person", StringComparison.OrdinalIgnoreCase))
+            {
+                return ReplayPlaybackCameraMode.FirstPerson;
+            }
+
+            if (string.Equals(value, "3rd person", StringComparison.OrdinalIgnoreCase))
+            {
+                return ReplayPlaybackCameraMode.ThirdPerson;
+            }
+
+            return ReplayPlaybackCameraMode.Free;
+        }
+
+        private void RefreshPlaybackCameraTargetDropdown(bool syncValue)
+        {
+            if (this.playbackCameraTargetDropdown == null || this.playback == null)
+            {
+                return;
+            }
+
+            this.playbackCameraTargets.Clear();
+            List<string> choices = new List<string>();
+            List<ReplayPlaybackPlayerTarget> targets = this.playback.CameraTargets;
+            for (int i = 0; i < targets.Count; i++)
+            {
+                ReplayPlaybackPlayerTarget target = targets[i];
+                string label = target.DisplayName;
+                if (string.IsNullOrEmpty(label))
+                {
+                    label = "Replay Player " + target.OwnerClientId;
+                }
+
+                if (this.playbackCameraTargets.ContainsKey(label))
+                {
+                    label += " (" + target.OwnerClientId + ")";
+                }
+
+                this.playbackCameraTargets[label] = target.OwnerClientId;
+                choices.Add(label);
+            }
+
+            if (choices.Count == 0)
+            {
+                choices.Add("No players");
+            }
+
+            bool choicesChanged = this.playbackCameraTargetDropdown.choices == null || this.playbackCameraTargetDropdown.choices.Count != choices.Count;
+            if (!choicesChanged)
+            {
+                for (int i = 0; i < choices.Count; i++)
+                {
+                    if (this.playbackCameraTargetDropdown.choices[i] != choices[i])
+                    {
+                        choicesChanged = true;
+                        break;
+                    }
+                }
+            }
+
+            if (choicesChanged)
+            {
+                this.playbackCameraTargetDropdown.choices = choices;
+            }
+
+            string selected = choices[0];
+            if (this.playback.CameraTargetClientId.HasValue)
+            {
+                foreach (KeyValuePair<string, ulong> entry in this.playbackCameraTargets)
+                {
+                    if (entry.Value == this.playback.CameraTargetClientId.Value)
+                    {
+                        selected = entry.Key;
+                        break;
+                    }
+                }
+            }
+
+            if (syncValue && this.playbackCameraTargetDropdown.value != selected)
+            {
+                this.playbackCameraTargetDropdown.SetValueWithoutNotify(selected);
+            }
+            else if (!syncValue)
+            {
+                this.LogPlaybackUiDebug("Skipped POV player selected-value sync during active dropdown interaction.", true);
+            }
+
+            this.playbackCameraTargetDropdown.SetEnabled(this.playbackCameraTargets.Count > 0);
         }
 
         internal void RefreshTimelineIndicator()
@@ -712,31 +872,65 @@ namespace PuckReplayMod
             this.playbackControlsPanel.style.left = new StyleLength(new Length(50f, LengthUnit.Percent));
             this.playbackControlsPanel.style.bottom = 22f;
             this.playbackControlsPanel.style.translate = new Translate(new Length(-50f, LengthUnit.Percent), 0f);
-            this.playbackControlsPanel.style.width = new StyleLength(new Length(68f, LengthUnit.Percent));
-            this.playbackControlsPanel.style.maxWidth = 860f;
-            this.playbackControlsPanel.style.minWidth = 580f;
-            this.playbackControlsPanel.style.height = 50f;
-            this.playbackControlsPanel.style.minHeight = 50f;
-            this.playbackControlsPanel.style.flexDirection = FlexDirection.Row;
-            this.playbackControlsPanel.style.alignItems = Align.Center;
-            this.playbackControlsPanel.style.paddingLeft = 8f;
-            this.playbackControlsPanel.style.paddingRight = 8f;
+            this.playbackControlsPanel.style.width = new StyleLength(new Length(76f, LengthUnit.Percent));
+            this.playbackControlsPanel.style.maxWidth = 1040f;
+            this.playbackControlsPanel.style.minWidth = 700f;
+            this.playbackControlsPanel.style.height = 86f;
+            this.playbackControlsPanel.style.minHeight = 86f;
+            this.playbackControlsPanel.style.flexDirection = FlexDirection.Column;
+            this.playbackControlsPanel.style.paddingLeft = 10f;
+            this.playbackControlsPanel.style.paddingRight = 10f;
+            this.playbackControlsPanel.style.paddingTop = 8f;
+            this.playbackControlsPanel.style.paddingBottom = 8f;
             this.playbackControlsPanel.style.backgroundColor = new Color(0.04f, 0.05f, 0.06f, 0.86f);
             this.playbackControlsPanel.style.display = DisplayStyle.None;
             this.playbackControlsPanel.pickingMode = PickingMode.Position;
             this.playbackControlsPanel.RegisterCallback<PointerDownEvent>(this.OnPlaybackControlsPointerDown, TrickleDown.TrickleDown);
 
-            Button stopButton = ReplayUiTools.CreateButton("EXIT", null);
-            stopButton.RegisterCallback<PointerDownEvent>(this.OnPlaybackExitPointerDown);
+            VisualElement scrubRow = new VisualElement();
+            scrubRow.style.flexDirection = FlexDirection.Row;
+            scrubRow.style.alignItems = Align.Center;
+            scrubRow.style.height = 28f;
+            scrubRow.style.marginBottom = 8f;
+
+            VisualElement timelineTrack = new VisualElement
+            {
+                name = "PuckReplayModPlaybackScrubTrack"
+            };
+            timelineTrack.style.flexGrow = 1f;
+            timelineTrack.style.height = 28f;
+            timelineTrack.style.backgroundColor = new Color(0.22f, 0.24f, 0.26f, 1f);
+            timelineTrack.RegisterCallback<PointerDownEvent>(this.OnPlaybackTimelinePointerDown);
+
+            this.playbackProgressBar = new VisualElement
+            {
+                name = "PuckReplayModPlaybackScrubProgress"
+            };
+            this.playbackProgressBar.style.position = Position.Absolute;
+            this.playbackProgressBar.style.left = 0f;
+            this.playbackProgressBar.style.top = 0f;
+            this.playbackProgressBar.style.bottom = 0f;
+            this.playbackProgressBar.style.width = new StyleLength(new Length(0f, LengthUnit.Percent));
+            this.playbackProgressBar.style.backgroundColor = new Color(0.72f, 0.72f, 0.72f, 0.55f);
+            this.playbackProgressBar.pickingMode = PickingMode.Ignore;
+            timelineTrack.Add(this.playbackProgressBar);
+            scrubRow.Add(timelineTrack);
+            this.playbackControlsPanel.Add(scrubRow);
+
+            VisualElement controlsRow = new VisualElement();
+            controlsRow.style.flexDirection = FlexDirection.Row;
+            controlsRow.style.alignItems = Align.Center;
+            controlsRow.style.height = 34f;
+
+            Button stopButton = ReplayUiTools.CreateButton("EXIT", this.OnPlaybackExitClicked);
             stopButton.style.width = 70f;
             stopButton.style.minWidth = 70f;
             stopButton.style.height = 32f;
             stopButton.style.minHeight = 32f;
             stopButton.style.marginRight = 6f;
-            this.playbackControlsPanel.Add(stopButton);
+            controlsRow.Add(stopButton);
 
-            this.playbackPlayPauseButton = ReplayUiTools.CreateButton(string.Empty, null);
-            this.playbackPlayPauseButton.RegisterCallback<PointerDownEvent>(this.OnPlaybackPlayPausePointerDown);
+            this.playbackPlayPauseButton = ReplayUiTools.CreateButton(string.Empty, this.OnPlaybackPlayPauseClicked);
             this.playbackPlayPauseButton.style.width = 78f;
             this.playbackPlayPauseButton.style.minWidth = 78f;
             this.playbackPlayPauseButton.style.height = 32f;
@@ -758,31 +952,25 @@ namespace PuckReplayMod
             {
                 this.playbackPlayPauseIcon.SetColor(Color.white);
             });
-            this.playbackControlsPanel.Add(this.playbackPlayPauseButton);
+            controlsRow.Add(this.playbackPlayPauseButton);
 
-            VisualElement timelineTrack = new VisualElement
+            Button backFiveButton = this.CreatePlaybackControlButton("seek-backward-5.svg", 24f, 46f, delegate
             {
-                name = "PuckReplayModPlaybackScrubTrack"
-            };
-            timelineTrack.style.flexGrow = 1f;
-            timelineTrack.style.height = 28f;
-            timelineTrack.style.marginRight = 8f;
-            timelineTrack.style.backgroundColor = new Color(0.22f, 0.24f, 0.26f, 1f);
-            timelineTrack.RegisterCallback<PointerDownEvent>(this.OnPlaybackTimelinePointerDown);
+                this.playback.SeekRelativeSeconds(-5f);
+                this.RefreshPlaybackControls();
+                this.RefreshPlaybackStatus();
+            });
+            backFiveButton.tooltip = "Back 5 seconds";
+            controlsRow.Add(backFiveButton);
 
-            this.playbackProgressBar = new VisualElement
+            Button backTickButton = this.CreatePlaybackControlButton("frame-previous.svg", 20f, 38f, delegate
             {
-                name = "PuckReplayModPlaybackScrubProgress"
-            };
-            this.playbackProgressBar.style.position = Position.Absolute;
-            this.playbackProgressBar.style.left = 0f;
-            this.playbackProgressBar.style.top = 0f;
-            this.playbackProgressBar.style.bottom = 0f;
-            this.playbackProgressBar.style.width = new StyleLength(new Length(0f, LengthUnit.Percent));
-            this.playbackProgressBar.style.backgroundColor = new Color(0.72f, 0.72f, 0.72f, 0.55f);
-            this.playbackProgressBar.pickingMode = PickingMode.Ignore;
-            timelineTrack.Add(this.playbackProgressBar);
-            this.playbackControlsPanel.Add(timelineTrack);
+                this.playback.SeekRelativeTicks(-1);
+                this.RefreshPlaybackControls();
+                this.RefreshPlaybackStatus();
+            });
+            backTickButton.tooltip = "Back 1 replay tick";
+            controlsRow.Add(backTickButton);
 
             this.playbackTimeLabel = new Label("00:00 / 00:00");
             this.playbackTimeLabel.style.width = 112f;
@@ -790,8 +978,27 @@ namespace PuckReplayMod
             this.playbackTimeLabel.style.color = Color.white;
             this.playbackTimeLabel.style.fontSize = 12f;
             this.playbackTimeLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
+            this.playbackTimeLabel.style.marginLeft = 4f;
             this.playbackTimeLabel.style.marginRight = 8f;
-            this.playbackControlsPanel.Add(this.playbackTimeLabel);
+            controlsRow.Add(this.playbackTimeLabel);
+
+            Button forwardTickButton = this.CreatePlaybackControlButton("frame-next.svg", 20f, 38f, delegate
+            {
+                this.playback.SeekRelativeTicks(1);
+                this.RefreshPlaybackControls();
+                this.RefreshPlaybackStatus();
+            });
+            forwardTickButton.tooltip = "Forward 1 replay tick";
+            controlsRow.Add(forwardTickButton);
+
+            Button forwardFiveButton = this.CreatePlaybackControlButton("seek-forward-5.svg", 24f, 46f, delegate
+            {
+                this.playback.SeekRelativeSeconds(5f);
+                this.RefreshPlaybackControls();
+                this.RefreshPlaybackStatus();
+            });
+            forwardFiveButton.tooltip = "Forward 5 seconds";
+            controlsRow.Add(forwardFiveButton);
 
             this.playbackSpeedDropdown = ReplayUiTools.CreateDropdown(new List<string>
             {
@@ -804,46 +1011,188 @@ namespace PuckReplayMod
             this.playbackSpeedDropdown.style.width = 82f;
             this.playbackSpeedDropdown.style.minWidth = 82f;
             this.playbackSpeedDropdown.style.maxWidth = 82f;
-            this.playbackControlsPanel.Add(this.playbackSpeedDropdown);
+            this.playbackSpeedDropdown.style.marginLeft = 8f;
+            this.playbackSpeedDropdown.tooltip = "Playback speed";
+            this.RegisterPlaybackDropdownDebugCallbacks(this.playbackSpeedDropdown, "speed");
+            controlsRow.Add(this.playbackSpeedDropdown);
+
+            this.playbackCameraModeDropdown = ReplayUiTools.CreateDropdown(new List<string>
+            {
+                "Free",
+                "1st person",
+                "3rd person"
+            }, "Free", this.OnPlaybackCameraModeChanged);
+            this.playbackCameraModeDropdown.style.width = 118f;
+            this.playbackCameraModeDropdown.style.minWidth = 118f;
+            this.playbackCameraModeDropdown.style.maxWidth = 118f;
+            this.playbackCameraModeDropdown.style.marginLeft = 8f;
+            this.playbackCameraModeDropdown.tooltip = "Camera mode";
+            this.RegisterPlaybackDropdownDebugCallbacks(this.playbackCameraModeDropdown, "camera mode");
+            controlsRow.Add(this.playbackCameraModeDropdown);
+
+            this.playbackCameraTargetDropdown = ReplayUiTools.CreateDropdown(new List<string>
+            {
+                "No players"
+            }, "No players", this.OnPlaybackCameraTargetChanged);
+            this.playbackCameraTargetDropdown.style.width = 170f;
+            this.playbackCameraTargetDropdown.style.minWidth = 170f;
+            this.playbackCameraTargetDropdown.style.maxWidth = 170f;
+            this.playbackCameraTargetDropdown.style.marginLeft = 6f;
+            this.playbackCameraTargetDropdown.tooltip = "POV player";
+            this.RegisterPlaybackDropdownDebugCallbacks(this.playbackCameraTargetDropdown, "POV player");
+            controlsRow.Add(this.playbackCameraTargetDropdown);
+
+            this.playbackControlsPanel.Add(controlsRow);
 
             this.root.Add(this.playbackControlsPanel);
+        }
+
+        private Button CreatePlaybackControlButton(string iconFileName, float iconSize, float width, Action action)
+        {
+            Button button = ReplayUiTools.CreateButton(string.Empty, delegate
+            {
+                if (!this.IsPlaybackControlInputAllowed())
+                {
+                    return;
+                }
+
+                action();
+            });
+            button.style.width = width;
+            button.style.minWidth = width;
+            button.style.height = 32f;
+            button.style.minHeight = 32f;
+            button.style.marginRight = 4f;
+            button.style.paddingLeft = 0f;
+            button.style.paddingRight = 0f;
+            button.style.paddingTop = 0f;
+            button.style.paddingBottom = 0f;
+            button.style.alignItems = Align.Center;
+            button.style.justifyContent = Justify.Center;
+
+            VisualElement icon = ReplayUiTools.CreateSvgIcon(iconFileName, iconSize, Color.white);
+            button.Add(icon);
+            button.RegisterCallback<MouseEnterEvent>(delegate
+            {
+                ReplayUiTools.SetSvgIconColor(icon, Color.black);
+            });
+            button.RegisterCallback<MouseLeaveEvent>(delegate
+            {
+                ReplayUiTools.SetSvgIconColor(icon, Color.white);
+            });
+            return button;
         }
 
         private void OnPlaybackControlsPointerDown(PointerDownEvent evt)
         {
             if (this.IsPlaybackControlInputAllowed())
             {
+                this.LogPlaybackUiDebug("Allowed playback controls pointer down: " + this.GetPlaybackInputDebugState(evt), true);
                 return;
             }
 
+            this.LogPlaybackUiDebug("Blocked playback controls pointer down: " + this.GetPlaybackInputDebugState(evt), true);
             evt.StopImmediatePropagation();
         }
 
-        private void OnPlaybackExitPointerDown(PointerDownEvent evt)
+        private void RegisterPlaybackDropdownDebugCallbacks(PopupField<string> dropdown, string name)
+        {
+            if (dropdown == null)
+            {
+                return;
+            }
+
+            dropdown.RegisterCallback<PointerDownEvent>(delegate(PointerDownEvent evt)
+            {
+                this.ExtendPlaybackDropdownInteractionWindow();
+                this.LogPlaybackUiDebug("Dropdown pointer down (" + name + "): " + this.GetPlaybackInputDebugState(evt), false);
+            }, TrickleDown.TrickleDown);
+
+            dropdown.RegisterCallback<FocusInEvent>(delegate
+            {
+                this.ExtendPlaybackDropdownInteractionWindow();
+                this.LogPlaybackUiDebug("Dropdown focus in (" + name + "), value=" + dropdown.value + ".", false);
+            });
+
+            dropdown.RegisterCallback<FocusOutEvent>(delegate
+            {
+                this.ExtendPlaybackDropdownInteractionWindow();
+                this.LogPlaybackUiDebug("Dropdown focus out (" + name + "), value=" + dropdown.value + ".", false);
+            });
+
+            dropdown.RegisterValueChangedCallback(delegate(ChangeEvent<string> evt)
+            {
+                this.ExtendPlaybackDropdownInteractionWindow();
+                this.LogPlaybackUiDebug("Dropdown changed (" + name + "): " + evt.previousValue + " -> " + evt.newValue + ".", false);
+            });
+        }
+
+        private void ExtendPlaybackDropdownInteractionWindow()
+        {
+            this.playbackDropdownInteractionUntil = Mathf.Max(this.playbackDropdownInteractionUntil, Time.realtimeSinceStartup + 1.25f);
+        }
+
+        private bool IsPlaybackDropdownInteractionActive()
+        {
+            return Time.realtimeSinceStartup < this.playbackDropdownInteractionUntil;
+        }
+
+        private string GetPlaybackInputDebugState(EventBase evt)
+        {
+            VisualElement target = evt != null ? evt.target as VisualElement : null;
+            string targetName = target != null ? (string.IsNullOrEmpty(target.name) ? target.GetType().Name : target.name) : "unknown";
+            bool keyHeld = this.settings != null && this.IsKeyHeld(this.settings.PlaybackUiInputKey);
+            return "target=" + targetName +
+                ", active=" + this.playbackUiInputActive +
+                ", mode=" + (this.settings != null ? this.settings.PlaybackUiInputMode.ToString() : "none") +
+                ", keyHeld=" + keyHeld +
+                ", mouseRequiredApplied=" + this.playbackUiMouseRequiredApplied +
+                ", managerVisible=" + this.isManagerVisible +
+                ", playbackActive=" + (this.playback != null && this.playback.IsPlaybackActive);
+        }
+
+        private void LogPlaybackUiDebug(string message, bool throttle)
+        {
+            if (this.settings == null || !this.settings.EnableDebugProfiling)
+            {
+                return;
+            }
+
+            float realtime = Time.realtimeSinceStartup;
+            if (throttle && realtime < this.nextPlaybackUiDebugRealtime)
+            {
+                return;
+            }
+
+            if (throttle)
+            {
+                this.nextPlaybackUiDebugRealtime = realtime + 0.25f;
+            }
+
+            ReplayModLog.Info("[Playback UI] " + message);
+        }
+
+        private void OnPlaybackExitClicked()
         {
             if (!this.IsPlaybackControlInputAllowed())
             {
-                evt.StopImmediatePropagation();
                 return;
             }
 
             this.playback.Close();
             this.RefreshPlaybackControls();
             this.RefreshPlaybackStatus();
-            evt.StopImmediatePropagation();
         }
 
-        private void OnPlaybackPlayPausePointerDown(PointerDownEvent evt)
+        private void OnPlaybackPlayPauseClicked()
         {
             if (!this.IsPlaybackControlInputAllowed())
             {
-                evt.StopImmediatePropagation();
                 return;
             }
 
             this.playback.TogglePause();
             this.RefreshPlaybackControls();
-            evt.StopImmediatePropagation();
         }
 
         private enum PlaybackPlayPauseIconMode
@@ -972,6 +1321,7 @@ namespace PuckReplayMod
             this.CreateManagerHeader();
             this.CreateManagerBody();
             this.CreateManagerFooter();
+            this.ApplyManagerScale();
 
             this.root.Add(this.managerPanel);
             this.ShowSection(this.selectedSection);
@@ -1131,6 +1481,10 @@ namespace PuckReplayMod
             {
                 ReplayStorageSection.Create(this, this.content);
             }
+            else if (sectionName == "Interface")
+            {
+                ReplayInterfaceSettingsSection.Create(this, this.content);
+            }
             else if (sectionName == "Advanced")
             {
                 ReplayAdvancedSettingsSection.Create(this, this.content);
@@ -1155,6 +1509,17 @@ namespace PuckReplayMod
             sectionContent.style.paddingTop = 16f;
             sectionContent.style.paddingBottom = 16f;
             return sectionContent;
+        }
+
+        internal void ApplyManagerScale()
+        {
+            if (this.managerPanel == null)
+            {
+                return;
+            }
+
+            float scale = this.settings != null ? Mathf.Clamp(this.settings.ManagerUiScale, 0.85f, 1.3f) : 1f;
+            this.managerPanel.style.scale = new StyleScale(new Scale(new Vector2(scale, scale)));
         }
 
         private void UpdateSidebarSelection()
@@ -1291,21 +1656,8 @@ namespace PuckReplayMod
 
             if (previous != this.playbackUiInputActive)
             {
+                this.LogPlaybackUiDebug("Playback UI input active changed: " + previous + " -> " + this.playbackUiInputActive + ".", false);
                 this.RefreshPlaybackControls();
-            }
-        }
-
-        private void SetPlaybackControlsPickingMode(VisualElement element, PickingMode pickingMode)
-        {
-            if (element == null)
-            {
-                return;
-            }
-
-            element.pickingMode = pickingMode;
-            foreach (VisualElement child in element.Children())
-            {
-                this.SetPlaybackControlsPickingMode(child, pickingMode);
             }
         }
 

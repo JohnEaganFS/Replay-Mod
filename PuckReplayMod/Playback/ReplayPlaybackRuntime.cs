@@ -18,11 +18,14 @@ namespace PuckReplayMod
 
         public static float PlaybackSpeed { get; private set; } = 1f;
 
+        public static int LastAppliedTick { get; private set; }
+
         public static void Attach(ReplayPlayer replayPlayer)
         {
             ControlledPlayer = replayPlayer;
             IsPaused = false;
             PlaybackSpeed = 1f;
+            LastAppliedTick = replayPlayer != null ? replayPlayer.Tick : 0;
             SetTickAccumulator(0f);
         }
 
@@ -36,6 +39,7 @@ namespace PuckReplayMod
             ControlledPlayer = null;
             IsPaused = false;
             PlaybackSpeed = 1f;
+            LastAppliedTick = 0;
         }
 
         public static void SetPaused(bool paused)
@@ -93,6 +97,7 @@ namespace PuckReplayMod
                 try
                 {
                     ServerTickMethod.Invoke(replayPlayer, new object[] { replayPlayer.Tick, false });
+                    LastAppliedTick = replayPlayer.Tick;
                 }
                 catch (Exception exception)
                 {
@@ -108,6 +113,69 @@ namespace PuckReplayMod
 
             SetTickAccumulator(accumulator);
             return true;
+        }
+
+        public static bool ShouldApplyEventsInstantly(ReplayPlayer replayPlayer)
+        {
+            return ControlledPlayer == replayPlayer && IsPaused;
+        }
+
+        public static void SetVisibleTick(ReplayPlayer replayPlayer, int tick)
+        {
+            if (ControlledPlayer != replayPlayer || replayPlayer == null)
+            {
+                return;
+            }
+
+            LastAppliedTick = Math.Max(0, tick);
+            replayPlayer.Tick = LastAppliedTick + 1;
+            SetTickAccumulator(0f);
+        }
+
+        public static void RunImmediateThrough(ReplayPlayer replayPlayer, int targetTick)
+        {
+            if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer || replayPlayer == null || !replayPlayer.IsReplaying)
+            {
+                return;
+            }
+
+            if (replayPlayer.EventMap == null || replayPlayer.EventMap.Count == 0 || ServerTickMethod == null)
+            {
+                return;
+            }
+
+            int guard = 0;
+            while (replayPlayer.IsReplaying && replayPlayer.Tick <= targetTick && guard < MaxTicksPerFrame)
+            {
+                guard++;
+                try
+                {
+                    ServerTickMethod.Invoke(replayPlayer, new object[] { replayPlayer.Tick, false });
+                    LastAppliedTick = replayPlayer.Tick;
+                }
+                catch (Exception exception)
+                {
+                    ReplayModLog.Warning("Immediate replay seek tick failed: " + exception.Message);
+                    break;
+                }
+
+                if (replayPlayer.IsReplaying)
+                {
+                    replayPlayer.Tick++;
+                }
+            }
+
+            SetTickAccumulator(0f);
+        }
+
+        public static int GetVisibleTick(ReplayPlayer replayPlayer)
+        {
+            if (ControlledPlayer == replayPlayer)
+            {
+                return LastAppliedTick;
+            }
+
+            return replayPlayer != null ? replayPlayer.Tick : 0;
         }
 
         private static float GetTickAccumulator()

@@ -27,6 +27,7 @@ namespace PuckReplayMod
         public bool HasMarkers;
         public bool IsFavorite;
         public bool IsMetadataComplete;
+        public int SummaryCacheVersion;
 
         public float DurationSeconds
         {
@@ -44,7 +45,7 @@ namespace PuckReplayMod
 
     public class ReplaySummaryCache
     {
-        public int CacheVersion = 2;
+        public int CacheVersion = ReplayModConstants.ReplaySummaryCacheVersion;
         public string FileName;
         public long SizeBytes;
         public long LastWriteUtcTicks;

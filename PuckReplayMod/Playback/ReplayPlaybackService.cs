@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -81,6 +82,21 @@ namespace PuckReplayMod
         public string CurrentFilePath
         {
             get { return this.currentFilePath; }
+        }
+
+        public ReplayPlaybackCameraMode CameraMode
+        {
+            get { return this.nativePlayback.CameraMode; }
+        }
+
+        public ulong? CameraTargetClientId
+        {
+            get { return this.nativePlayback.CameraTargetClientId; }
+        }
+
+        public List<ReplayPlaybackPlayerTarget> CameraTargets
+        {
+            get { return this.nativePlayback.GetCameraTargets(); }
         }
 
         public void Play(string filePath)
@@ -178,6 +194,21 @@ namespace PuckReplayMod
             this.nativePlayback.SetPlaybackSpeed(speed);
         }
 
+        public void SetCameraMode(ReplayPlaybackCameraMode mode)
+        {
+            this.nativePlayback.SetCameraMode(mode);
+        }
+
+        public void SetCameraTarget(ulong? ownerClientId)
+        {
+            this.nativePlayback.SetCameraTarget(ownerClientId);
+        }
+
+        public bool TryApplyPovCamera(SpectatorCamera spectatorCamera, float deltaTime)
+        {
+            return this.nativePlayback.TryApplyPovCamera(spectatorCamera, deltaTime);
+        }
+
         public void SeekToTick(int tick)
         {
             if (!this.IsPlaying || this.isPreparingNativePlayback)
@@ -186,6 +217,26 @@ namespace PuckReplayMod
             }
 
             this.nativePlayback.SeekToTick(Mathf.Clamp(tick, 0, this.TotalTicks));
+        }
+
+        public void SeekRelativeTicks(int deltaTicks)
+        {
+            if (deltaTicks == 1 || deltaTicks == -1)
+            {
+                this.nativePlayback.SetPaused(true);
+                if (this.nativePlayback.TryStepRelativeTicks(deltaTicks))
+                {
+                    return;
+                }
+            }
+
+            this.SeekToTick(this.CurrentTick + deltaTicks);
+        }
+
+        public void SeekRelativeSeconds(float deltaSeconds)
+        {
+            int deltaTicks = Mathf.RoundToInt(deltaSeconds * this.TickRate);
+            this.SeekRelativeTicks(deltaTicks);
         }
 
         public void Close()

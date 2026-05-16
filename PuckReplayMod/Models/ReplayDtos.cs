@@ -15,7 +15,7 @@ namespace PuckReplayMod
     public class ReplayHeaderDto
     {
         public string Magic = ReplayModConstants.ReplayMagic;
-        public int FormatVersion = 2;
+        public int FormatVersion = ReplayModConstants.ReplayDtoFormatVersion;
         public string ModVersion = ReplayModConstants.ModVersion;
         public string GameVersion = "323";
         public string ServerName = "Unknown Server";
@@ -57,6 +57,22 @@ namespace PuckReplayMod
     }
 
     [Serializable]
+    public class Vector2Dto
+    {
+        public float X;
+        public float Y;
+
+        public static Vector2Dto From(Vector2 value)
+        {
+            return new Vector2Dto
+            {
+                X = value.x,
+                Y = value.y
+            };
+        }
+    }
+
+    [Serializable]
     public class QuaternionDto
     {
         public float X;
@@ -82,6 +98,7 @@ namespace PuckReplayMod
         public List<PlayerBodyTransformPayload> PlayerBodies = new List<PlayerBodyTransformPayload>();
         public List<StickTransformPayload> Sticks = new List<StickTransformPayload>();
         public List<PuckTransformPayload> Pucks = new List<PuckTransformPayload>();
+        public List<PlayerInputPayload> PlayerInputs = new List<PlayerInputPayload>();
 
         public TransformFramePayload()
         {
@@ -92,6 +109,7 @@ namespace PuckReplayMod
             this.PlayerBodies = new List<PlayerBodyTransformPayload>(playerBodyCapacity);
             this.Sticks = new List<StickTransformPayload>(stickCapacity);
             this.Pucks = new List<PuckTransformPayload>(puckCapacity);
+            this.PlayerInputs = new List<PlayerInputPayload>(playerBodyCapacity);
         }
     }
 
@@ -124,6 +142,16 @@ namespace PuckReplayMod
         public ulong NetworkObjectId;
         public Vector3Dto Position;
         public QuaternionDto Rotation;
+    }
+
+    [Serializable]
+    public class PlayerInputPayload
+    {
+        public ulong OwnerClientId;
+        public Vector2Dto LookAngleInput;
+        public sbyte BladeAngleInput;
+        public bool TrackInput;
+        public bool LookInput;
     }
 
     [Serializable]
@@ -198,6 +226,7 @@ namespace PuckReplayMod
         public List<BodyLifecyclePayload> PlayerBodies = new List<BodyLifecyclePayload>();
         public List<PuckSnapshotPayload> Pucks = new List<PuckSnapshotPayload>();
         public List<StickSnapshotPayload> Sticks = new List<StickSnapshotPayload>();
+        public List<PlayerInputPayload> PlayerInputs = new List<PlayerInputPayload>();
 
         public InitialSnapshotPayload()
         {
@@ -209,6 +238,7 @@ namespace PuckReplayMod
             this.PlayerBodies = new List<BodyLifecyclePayload>(playerCapacity);
             this.Pucks = new List<PuckSnapshotPayload>(puckCapacity);
             this.Sticks = new List<StickSnapshotPayload>(stickCapacity);
+            this.PlayerInputs = new List<PlayerInputPayload>(playerCapacity);
         }
     }
 
@@ -253,6 +283,7 @@ namespace PuckReplayMod
         public ulong OwnerClientId;
         public Vector3Dto Position;
         public QuaternionDto Rotation;
+        public PlayerSnapshotPayload Player;
     }
 
     [Serializable]

@@ -181,12 +181,20 @@ namespace PuckReplayMod
             details.style.flexGrow = 1f;
             details.style.marginRight = 8f;
 
+            VisualElement titleRow = new VisualElement();
+            titleRow.style.flexDirection = FlexDirection.Row;
+            titleRow.style.alignItems = Align.Center;
+            details.Add(titleRow);
+
             Label title = ReplayUiTools.CreateConfigurationLabel(GetDisplayTitle(replay));
             title.style.color = Color.white;
             title.style.fontSize = 14f;
             title.style.marginBottom = 0f;
             title.style.whiteSpace = WhiteSpace.NoWrap;
-            details.Add(title);
+            titleRow.Add(title);
+
+            CompatibilityBadge compatibilityBadge = GetCompatibilityBadge(replay);
+            titleRow.Add(CreateCompatibilityBadge(compatibilityBadge));
 
             string date = replay.LastWriteUtc.ToLocalTime().ToString("MM/dd/yyyy HH:mm");
             string duration = replay.IsMetadataComplete ? FormatDuration(replay.DurationSeconds) : "Indexing...";
@@ -209,6 +217,12 @@ namespace PuckReplayMod
             playButton.style.height = 32f;
             playButton.style.minHeight = 32f;
             playButton.style.marginRight = 4f;
+            playButton.SetEnabled(!compatibilityBadge.IsUnsupported);
+            if (compatibilityBadge.IsUnsupported)
+            {
+                playButton.tooltip = "This replay was made with a newer replay format than this mod supports.";
+            }
+
             row.Add(playButton);
 
             VisualElement actionPanel = CreateActionPanel(ui, selectedReplay);
@@ -231,6 +245,95 @@ namespace PuckReplayMod
             row.Add(CreateFavoriteButton(ui, selectedReplay));
 
             return container;
+        }
+
+        private static Label CreateCompatibilityBadge(CompatibilityBadge badge)
+        {
+            Label label = new Label(badge.Text);
+            label.tooltip = badge.Tooltip;
+            label.style.fontSize = 10f;
+            label.style.color = badge.TextColor;
+            label.style.backgroundColor = badge.BackgroundColor;
+            label.style.marginLeft = 8f;
+            label.style.paddingLeft = 5f;
+            label.style.paddingRight = 5f;
+            label.style.paddingTop = 1f;
+            label.style.paddingBottom = 1f;
+            label.style.unityTextAlign = TextAnchor.MiddleCenter;
+            label.style.flexShrink = 0f;
+            return label;
+        }
+
+        private static CompatibilityBadge GetCompatibilityBadge(ReplayFileSummary replay)
+        {
+            if (replay == null || !replay.IsMetadataComplete)
+            {
+                return new CompatibilityBadge(
+                    "INDEXING",
+                    "Replay metadata is still being indexed.",
+                    ReplayUiTools.MutedTextColor,
+                    new Color(0.24f, 0.24f, 0.24f, 1f),
+                    false);
+            }
+
+            if (replay.SummaryCacheVersion > ReplayModConstants.ReplaySummaryCacheVersion ||
+                replay.ReplayFormatVersion > ReplayModConstants.ReplayDtoFormatVersion ||
+                (replay.ReplayContainerFormat == ReplayModConstants.ReplayBinaryMagic && replay.ReplayContainerVersion > ReplayModConstants.ReplayBinaryFormatVersion))
+            {
+                return new CompatibilityBadge(
+                    "UNSUPPORTED",
+                    "This replay uses a newer replay format than this mod supports.",
+                    Color.white,
+                    new Color(0.55f, 0.05f, 0.06f, 1f),
+                    true);
+            }
+
+            if (replay.SummaryCacheVersion < ReplayModConstants.ReplaySummaryCacheVersion)
+            {
+                return new CompatibilityBadge(
+                    "REINDEX",
+                    "This replay has an older summary cache. Replay Mod will refresh it in the background.",
+                    Color.black,
+                    new Color(0.95f, 0.7f, 0.18f, 1f),
+                    false);
+            }
+
+            if (replay.ReplayFormatVersion < ReplayModConstants.ReplayDtoFormatVersion ||
+                replay.ReplayContainerFormat != ReplayModConstants.ReplayBinaryMagic ||
+                replay.ReplayContainerVersion < ReplayModConstants.ReplayBinaryFormatVersion)
+            {
+                return new CompatibilityBadge(
+                    "OLDER",
+                    "This replay is from an older Replay Mod format. It is readable, but newer playback features may be missing.",
+                    Color.black,
+                    new Color(0.95f, 0.82f, 0.3f, 1f),
+                    false);
+            }
+
+            return new CompatibilityBadge(
+                "CURRENT",
+                "This replay uses the current Replay Mod format.",
+                Color.white,
+                new Color(0.12f, 0.42f, 0.2f, 1f),
+                false);
+        }
+
+        private struct CompatibilityBadge
+        {
+            public CompatibilityBadge(string text, string tooltip, Color textColor, Color backgroundColor, bool isUnsupported)
+            {
+                this.Text = text;
+                this.Tooltip = tooltip;
+                this.TextColor = textColor;
+                this.BackgroundColor = backgroundColor;
+                this.IsUnsupported = isUnsupported;
+            }
+
+            public string Text;
+            public string Tooltip;
+            public Color TextColor;
+            public Color BackgroundColor;
+            public bool IsUnsupported;
         }
 
         private static Button CreateFavoriteButton(ReplayModUiService ui, ReplayFileSummary replay)
@@ -349,8 +452,8 @@ namespace PuckReplayMod
             {
                 ui.OpenReplayLocation(replay);
             });
-            openButton.style.width = 140f;
-            openButton.style.minWidth = 140f;
+            openButton.style.width = 104f;
+            openButton.style.minWidth = 104f;
             panel.Add(openButton);
 
             Button copyPathButton = CreateActionButton("COPY PATH", delegate
@@ -363,19 +466,29 @@ namespace PuckReplayMod
             {
                 ShowDeleteConfirmation(ui, replay, panel);
             });
-            deleteButton.style.width = 110f;
-            deleteButton.style.minWidth = 110f;
-            deleteButton.style.marginLeft = 8f;
+            StyleCompactActionButton(deleteButton);
             panel.Add(deleteButton);
         }
 
         private static Button CreateActionButton(string text, Action action)
         {
             Button button = ReplayUiTools.CreateButton(text, action);
-            button.style.width = 110f;
-            button.style.minWidth = 110f;
-            button.style.marginLeft = 8f;
+            StyleCompactActionButton(button);
             return button;
+        }
+
+        private static void StyleCompactActionButton(Button button)
+        {
+            button.style.width = 82f;
+            button.style.minWidth = 82f;
+            button.style.height = 28f;
+            button.style.minHeight = 28f;
+            button.style.marginLeft = 4f;
+            button.style.paddingLeft = 4f;
+            button.style.paddingRight = 4f;
+            button.style.paddingTop = 4f;
+            button.style.paddingBottom = 4f;
+            button.style.fontSize = 12f;
         }
 
         private static void ShowRenameForm(ReplayModUiService ui, ReplayFileSummary replay, VisualElement panel)

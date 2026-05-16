@@ -41,11 +41,27 @@ namespace PuckReplayMod
                 return eventMap;
             }
 
-            List<ReplayEventDto> events = new List<ReplayEventDto>(session.Events);
-            events.Sort((left, right) => left.Tick.CompareTo(right.Tick));
-
-            foreach (ReplayEventDto replayEvent in events)
+            List<ValueTuple<int, ReplayEventDto>> events = new List<ValueTuple<int, ReplayEventDto>>(session.Events.Count);
+            for (int i = 0; i < session.Events.Count; i++)
             {
+                events.Add(new ValueTuple<int, ReplayEventDto>(i, session.Events[i]));
+            }
+
+            events.Sort(delegate(ValueTuple<int, ReplayEventDto> left, ValueTuple<int, ReplayEventDto> right)
+            {
+                int tickCompare = GetTick(left.Item2).CompareTo(GetTick(right.Item2));
+                if (tickCompare != 0)
+                {
+                    return tickCompare;
+                }
+
+                int priorityCompare = GetEventPriority(left.Item2).CompareTo(GetEventPriority(right.Item2));
+                return priorityCompare != 0 ? priorityCompare : left.Item1.CompareTo(right.Item1);
+            });
+
+            foreach (ValueTuple<int, ReplayEventDto> indexedEvent in events)
+            {
+                ReplayEventDto replayEvent = indexedEvent.Item2;
                 if (replayEvent == null)
                 {
                     continue;
@@ -89,6 +105,12 @@ namespace PuckReplayMod
                 case "PlayerBodyDespawned":
                     this.ConvertPlayerBodyDespawned(eventMap, replayEvent.Tick, replayEvent.Payload as BodyLifecyclePayload);
                     break;
+                case "StickSpawned":
+                    this.ConvertStickSpawned(eventMap, replayEvent.Tick, replayEvent.Payload as StickSnapshotPayload);
+                    break;
+                case "StickDespawned":
+                    this.ConvertStickDespawned(eventMap, replayEvent.Tick, replayEvent.Payload as StickSnapshotPayload);
+                    break;
                 case "PuckSpawned":
                     this.ConvertPuckSpawned(eventMap, replayEvent.Tick, replayEvent.Payload as PuckLifecyclePayload);
                     break;
@@ -119,8 +141,17 @@ namespace PuckReplayMod
                 this.EnsureStickSpawned(eventMap, tick, stick.OwnerClientId, ToVector3(stick.Position), ToQuaternion(stick.Rotation));
             }
 
+            if (snapshot.PlayerInputs != null)
+            {
+                foreach (PlayerInputPayload input in snapshot.PlayerInputs)
+                {
+                    this.AddPlayerInput(eventMap, tick, input);
+                }
+            }
+
             foreach (BodyLifecyclePayload body in snapshot.PlayerBodies)
             {
+                this.TrackPlayer(body.Player);
                 this.EnsurePlayerSpawned(eventMap, tick, this.GetOrCreatePlayer(body.OwnerClientId));
                 this.EnsureBodySpawned(eventMap, tick, body.OwnerClientId, ToVector3(body.Position), ToQuaternion(body.Rotation));
             }
@@ -188,6 +219,14 @@ namespace PuckReplayMod
                 });
                 this.puckMoveEvents++;
             }
+
+            if (frame.PlayerInputs != null)
+            {
+                foreach (PlayerInputPayload input in frame.PlayerInputs)
+                {
+                    this.AddPlayerInput(eventMap, tick, input);
+                }
+            }
         }
 
         private void ConvertPlayerSpawned(SortedList<int, List<ValueTuple<string, object>>> eventMap, int tick, PlayerLifecyclePayload payload)
@@ -224,6 +263,16 @@ namespace PuckReplayMod
                 return;
             }
 
+            this.TrackPlayer(payload.Player);
+            if (this.spawnedBodies.Contains(payload.OwnerClientId))
+            {
+                this.Add(eventMap, tick, "PlayerBodyDespawned", new ReplayPlayerBodyDespawned
+                {
+                    OwnerClientId = payload.OwnerClientId
+                });
+                this.spawnedBodies.Remove(payload.OwnerClientId);
+            }
+
             this.EnsurePlayerSpawned(eventMap, tick, this.GetOrCreatePlayer(payload.OwnerClientId));
             this.EnsureBodySpawned(eventMap, tick, payload.OwnerClientId, ToVector3(payload.Position), ToQuaternion(payload.Rotation));
         }
@@ -240,6 +289,53 @@ namespace PuckReplayMod
                 OwnerClientId = payload.OwnerClientId
             });
             this.spawnedBodies.Remove(payload.OwnerClientId);
+            if (this.spawnedSticks.Contains(payload.OwnerClientId))
+            {
+                this.Add(eventMap, tick, "StickDespawned", new ReplayStickDespawned
+                {
+                    OwnerClientId = payload.OwnerClientId
+                });
+                this.spawnedSticks.Remove(payload.OwnerClientId);
+            }
+        }
+
+        private void ConvertStickSpawned(SortedList<int, List<ValueTuple<string, object>>> eventMap, int tick, StickSnapshotPayload payload)
+        {
+            if (payload == null)
+            {
+                return;
+            }
+
+            if (this.spawnedSticks.Contains(payload.OwnerClientId))
+            {
+                this.Add(eventMap, tick, "StickDespawned", new ReplayStickDespawned
+                {
+                    OwnerClientId = payload.OwnerClientId
+                });
+                this.spawnedSticks.Remove(payload.OwnerClientId);
+            }
+
+            this.EnsurePlayerSpawned(eventMap, tick, this.GetOrCreatePlayer(payload.OwnerClientId));
+            this.EnsureStickSpawned(eventMap, tick, payload.OwnerClientId, ToVector3(payload.Position), ToQuaternion(payload.Rotation));
+        }
+
+        private void ConvertStickDespawned(SortedList<int, List<ValueTuple<string, object>>> eventMap, int tick, StickSnapshotPayload payload)
+        {
+            if (payload == null)
+            {
+                return;
+            }
+
+            if (!this.spawnedSticks.Contains(payload.OwnerClientId))
+            {
+                return;
+            }
+
+            this.Add(eventMap, tick, "StickDespawned", new ReplayStickDespawned
+            {
+                OwnerClientId = payload.OwnerClientId
+            });
+            this.spawnedSticks.Remove(payload.OwnerClientId);
         }
 
         private void ConvertPuckSpawned(SortedList<int, List<ValueTuple<string, object>>> eventMap, int tick, PuckLifecyclePayload payload)
@@ -389,6 +485,23 @@ namespace PuckReplayMod
             events.Add(new ValueTuple<string, object>(eventName, eventData));
         }
 
+        private void AddPlayerInput(SortedList<int, List<ValueTuple<string, object>>> eventMap, int tick, PlayerInputPayload input)
+        {
+            if (input == null)
+            {
+                return;
+            }
+
+            this.Add(eventMap, tick, "PlayerInput", new ReplayPlayerInput
+            {
+                OwnerClientId = input.OwnerClientId,
+                LookAngleInput = ToVector2(input.LookAngleInput),
+                BladeAngleInput = input.BladeAngleInput,
+                TrackInput = input.TrackInput,
+                LookInput = input.LookInput
+            });
+        }
+
         private static PlayerGameState BuildGameState(PlayerSnapshotPayload player)
         {
             PlayerPhase phase = ParseEnum(player != null ? player.Phase : null, PlayerPhase.Play);
@@ -469,9 +582,49 @@ namespace PuckReplayMod
             return dto == null ? Vector3.zero : new Vector3(dto.X, dto.Y, dto.Z);
         }
 
+        private static Vector2 ToVector2(Vector2Dto dto)
+        {
+            return dto == null ? Vector2.zero : new Vector2(dto.X, dto.Y);
+        }
+
         private static Quaternion ToQuaternion(QuaternionDto dto)
         {
             return dto == null ? Quaternion.identity : new Quaternion(dto.X, dto.Y, dto.Z, dto.W);
+        }
+
+        private static int GetTick(ReplayEventDto replayEvent)
+        {
+            return replayEvent != null ? replayEvent.Tick : 0;
+        }
+
+        private static int GetEventPriority(ReplayEventDto replayEvent)
+        {
+            string type = replayEvent != null ? replayEvent.Type : null;
+            switch (type)
+            {
+                case "InitialSnapshot":
+                    return 0;
+                case "PlayerSpawned":
+                    return 1;
+                case "PlayerState":
+                    return 2;
+                case "PlayerBodyDespawned":
+                    return 3;
+                case "StickDespawned":
+                    return 4;
+                case "PlayerBodySpawned":
+                    return 5;
+                case "StickSpawned":
+                    return 6;
+                case "PuckDespawned":
+                    return 7;
+                case "PuckSpawned":
+                    return 8;
+                case "TransformFrame":
+                    return 20;
+                default:
+                    return 10;
+            }
         }
     }
 }

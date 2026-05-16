@@ -20,6 +20,8 @@ namespace PuckReplayMod
         private const byte EventScoreboardSnapshot = 11;
         private const byte EventChatMessage = 12;
         private const byte EventMarker = 13;
+        private const byte EventStickSpawned = 14;
+        private const byte EventStickDespawned = 15;
 
         public static bool IsBinaryReplay(string filePath)
         {
@@ -59,10 +61,16 @@ namespace PuckReplayMod
 
         public static ReplayHeaderDto ReadHeader(string filePath)
         {
+            int containerVersion;
+            return ReadHeader(filePath, out containerVersion);
+        }
+
+        public static ReplayHeaderDto ReadHeader(string filePath, out int containerVersion)
+        {
             using (FileStream stream = File.OpenRead(filePath))
             using (BinaryReader reader = new BinaryReader(stream, Encoding.UTF8))
             {
-                ReadAndValidatePrelude(reader);
+                containerVersion = ReadAndValidatePrelude(reader);
                 return ReadHeader(reader);
             }
         }
@@ -72,7 +80,7 @@ namespace PuckReplayMod
             using (FileStream stream = File.OpenRead(filePath))
             using (BinaryReader reader = new BinaryReader(stream, Encoding.UTF8))
             {
-                ReadAndValidatePrelude(reader);
+                int containerVersion = ReadAndValidatePrelude(reader);
                 ReplaySessionData session = new ReplaySessionData
                 {
                     Header = ReadHeader(reader),
@@ -88,7 +96,7 @@ namespace PuckReplayMod
                 session.Events = new List<ReplayEventDto>(eventCount);
                 for (int i = 0; i < eventCount; i++)
                 {
-                    session.Events.Add(ReadEvent(reader));
+                    session.Events.Add(ReadEvent(reader, containerVersion));
                 }
 
                 return session;
@@ -129,7 +137,7 @@ namespace PuckReplayMod
             return true;
         }
 
-        private static void ReadAndValidatePrelude(BinaryReader reader)
+        private static int ReadAndValidatePrelude(BinaryReader reader)
         {
             byte[] expected = Encoding.ASCII.GetBytes(ReplayModConstants.ReplayBinaryMagic);
             byte[] actual = reader.ReadBytes(expected.Length);
@@ -147,10 +155,12 @@ namespace PuckReplayMod
             }
 
             int version = reader.ReadInt32();
-            if (version != ReplayModConstants.ReplayBinaryFormatVersion)
+            if (version < 1 || version > ReplayModConstants.ReplayBinaryFormatVersion)
             {
                 throw new InvalidDataException("Replay binary format version " + version + " is not supported.");
             }
+
+            return version;
         }
 
         private static void WriteHeader(BinaryWriter writer, ReplayHeaderDto header)
@@ -208,7 +218,7 @@ namespace PuckReplayMod
                 throw new InvalidDataException("Replay magic does not match " + ReplayModConstants.ReplayMagic + ".");
             }
 
-            if (header.FormatVersion > 2)
+            if (header.FormatVersion > ReplayModConstants.ReplayDtoFormatVersion)
             {
                 throw new InvalidDataException("Replay DTO format version " + header.FormatVersion + " is newer than this mod supports.");
             }
@@ -247,6 +257,10 @@ namespace PuckReplayMod
                 case EventPlayerBodyDespawned:
                     WriteBodyLifecycle(writer, replayEvent.Payload as BodyLifecyclePayload);
                     return;
+                case EventStickSpawned:
+                case EventStickDespawned:
+                    WriteStickSnapshot(writer, replayEvent.Payload as StickSnapshotPayload);
+                    return;
                 case EventPuckSpawned:
                 case EventPuckDespawned:
                     WritePuckLifecycle(writer, replayEvent.Payload as PuckLifecyclePayload);
@@ -271,7 +285,7 @@ namespace PuckReplayMod
             }
         }
 
-        private static ReplayEventDto ReadEvent(BinaryReader reader)
+        private static ReplayEventDto ReadEvent(BinaryReader reader, int containerVersion)
         {
             int tick = reader.ReadInt32();
             byte eventKind = reader.ReadByte();
@@ -280,24 +294,27 @@ namespace PuckReplayMod
             {
                 Tick = tick,
                 Type = ToEventName(eventKind),
-                Payload = hasPayload ? ReadPayload(reader, eventKind) : null
+                Payload = hasPayload ? ReadPayload(reader, eventKind, containerVersion) : null
             };
         }
 
-        private static object ReadPayload(BinaryReader reader, byte eventKind)
+        private static object ReadPayload(BinaryReader reader, byte eventKind, int containerVersion)
         {
             switch (eventKind)
             {
                 case EventInitialSnapshot:
-                    return ReadInitialSnapshot(reader);
+                    return ReadInitialSnapshot(reader, containerVersion);
                 case EventTransformFrame:
-                    return ReadTransformFrame(reader);
+                    return ReadTransformFrame(reader, containerVersion);
                 case EventPlayerSpawned:
                 case EventPlayerDespawned:
                     return ReadPlayerLifecycle(reader);
                 case EventPlayerBodySpawned:
                 case EventPlayerBodyDespawned:
-                    return ReadBodyLifecycle(reader);
+                    return ReadBodyLifecycle(reader, containerVersion);
+                case EventStickSpawned:
+                case EventStickDespawned:
+                    return ReadStickSnapshot(reader);
                 case EventPuckSpawned:
                 case EventPuckDespawned:
                     return ReadPuckLifecycle(reader);
@@ -332,6 +349,10 @@ namespace PuckReplayMod
                     return EventPlayerBodySpawned;
                 case "PlayerBodyDespawned":
                     return EventPlayerBodyDespawned;
+                case "StickSpawned":
+                    return EventStickSpawned;
+                case "StickDespawned":
+                    return EventStickDespawned;
                 case "PuckSpawned":
                     return EventPuckSpawned;
                 case "PuckDespawned":
@@ -367,6 +388,10 @@ namespace PuckReplayMod
                     return "PlayerBodySpawned";
                 case EventPlayerBodyDespawned:
                     return "PlayerBodyDespawned";
+                case EventStickSpawned:
+                    return "StickSpawned";
+                case EventStickDespawned:
+                    return "StickDespawned";
                 case EventPuckSpawned:
                     return "PuckSpawned";
                 case EventPuckDespawned:
@@ -399,9 +424,10 @@ namespace PuckReplayMod
             WriteBodyLifecycleList(writer, payload.PlayerBodies);
             WritePuckSnapshotList(writer, payload.Pucks);
             WriteStickSnapshotList(writer, payload.Sticks);
+            WritePlayerInputList(writer, payload.PlayerInputs);
         }
 
-        private static InitialSnapshotPayload ReadInitialSnapshot(BinaryReader reader)
+        private static InitialSnapshotPayload ReadInitialSnapshot(BinaryReader reader, int containerVersion)
         {
             InitialSnapshotPayload payload = new InitialSnapshotPayload();
             if (reader.ReadBoolean())
@@ -410,9 +436,10 @@ namespace PuckReplayMod
             }
 
             payload.Players = ReadPlayerSnapshotList(reader);
-            payload.PlayerBodies = ReadBodyLifecycleList(reader);
+            payload.PlayerBodies = ReadBodyLifecycleList(reader, containerVersion);
             payload.Pucks = ReadPuckSnapshotList(reader);
             payload.Sticks = ReadStickSnapshotList(reader);
+            payload.PlayerInputs = containerVersion >= 2 ? ReadPlayerInputList(reader) : new List<PlayerInputPayload>();
             return payload;
         }
 
@@ -422,15 +449,17 @@ namespace PuckReplayMod
             WritePlayerBodyTransformList(writer, payload.PlayerBodies);
             WriteStickTransformList(writer, payload.Sticks);
             WritePuckTransformList(writer, payload.Pucks);
+            WritePlayerInputList(writer, payload.PlayerInputs);
         }
 
-        private static TransformFramePayload ReadTransformFrame(BinaryReader reader)
+        private static TransformFramePayload ReadTransformFrame(BinaryReader reader, int containerVersion)
         {
             return new TransformFramePayload
             {
                 PlayerBodies = ReadPlayerBodyTransformList(reader),
                 Sticks = ReadStickTransformList(reader),
-                Pucks = ReadPuckTransformList(reader)
+                Pucks = ReadPuckTransformList(reader),
+                PlayerInputs = containerVersion >= 2 ? ReadPlayerInputList(reader) : new List<PlayerInputPayload>()
             };
         }
 
@@ -457,16 +486,28 @@ namespace PuckReplayMod
             writer.Write(payload.OwnerClientId);
             WriteVector3(writer, payload.Position);
             WriteQuaternion(writer, payload.Rotation);
+            writer.Write(payload.Player != null);
+            if (payload.Player != null)
+            {
+                WritePlayerSnapshot(writer, payload.Player);
+            }
         }
 
-        private static BodyLifecyclePayload ReadBodyLifecycle(BinaryReader reader)
+        private static BodyLifecyclePayload ReadBodyLifecycle(BinaryReader reader, int containerVersion)
         {
-            return new BodyLifecyclePayload
+            BodyLifecyclePayload payload = new BodyLifecyclePayload
             {
                 OwnerClientId = reader.ReadUInt64(),
                 Position = ReadVector3(reader),
                 Rotation = ReadQuaternion(reader)
             };
+
+            if (containerVersion >= 3 && reader.ReadBoolean())
+            {
+                payload.Player = ReadPlayerSnapshot(reader);
+            }
+
+            return payload;
         }
 
         private static void WritePuckLifecycle(BinaryWriter writer, PuckLifecyclePayload payload)
@@ -790,6 +831,44 @@ namespace PuckReplayMod
             return items;
         }
 
+        private static void WritePlayerInputList(BinaryWriter writer, List<PlayerInputPayload> items)
+        {
+            writer.Write(items != null ? items.Count : 0);
+            if (items == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < items.Count; i++)
+            {
+                PlayerInputPayload payload = items[i] ?? new PlayerInputPayload();
+                writer.Write(payload.OwnerClientId);
+                WriteVector2(writer, payload.LookAngleInput);
+                writer.Write(payload.BladeAngleInput);
+                writer.Write(payload.TrackInput);
+                writer.Write(payload.LookInput);
+            }
+        }
+
+        private static List<PlayerInputPayload> ReadPlayerInputList(BinaryReader reader)
+        {
+            int count = ReadCount(reader);
+            List<PlayerInputPayload> items = new List<PlayerInputPayload>(count);
+            for (int i = 0; i < count; i++)
+            {
+                items.Add(new PlayerInputPayload
+                {
+                    OwnerClientId = reader.ReadUInt64(),
+                    LookAngleInput = ReadVector2(reader),
+                    BladeAngleInput = reader.ReadSByte(),
+                    TrackInput = reader.ReadBoolean(),
+                    LookInput = reader.ReadBoolean()
+                });
+            }
+
+            return items;
+        }
+
         private static void WritePlayerSnapshotList(BinaryWriter writer, List<PlayerSnapshotPayload> items)
         {
             writer.Write(items != null ? items.Count : 0);
@@ -830,13 +909,13 @@ namespace PuckReplayMod
             }
         }
 
-        private static List<BodyLifecyclePayload> ReadBodyLifecycleList(BinaryReader reader)
+        private static List<BodyLifecyclePayload> ReadBodyLifecycleList(BinaryReader reader, int containerVersion)
         {
             int count = ReadCount(reader);
             List<BodyLifecyclePayload> items = new List<BodyLifecyclePayload>(count);
             for (int i = 0; i < count; i++)
             {
-                items.Add(ReadBodyLifecycle(reader));
+                items.Add(ReadBodyLifecycle(reader, containerVersion));
             }
 
             return items;
@@ -893,6 +972,14 @@ namespace PuckReplayMod
             }
         }
 
+        private static void WriteStickSnapshot(BinaryWriter writer, StickSnapshotPayload payload)
+        {
+            payload = payload ?? new StickSnapshotPayload();
+            writer.Write(payload.OwnerClientId);
+            WriteVector3(writer, payload.Position);
+            WriteQuaternion(writer, payload.Rotation);
+        }
+
         private static List<StickSnapshotPayload> ReadStickSnapshotList(BinaryReader reader)
         {
             int count = ReadCount(reader);
@@ -910,11 +997,36 @@ namespace PuckReplayMod
             return items;
         }
 
+        private static StickSnapshotPayload ReadStickSnapshot(BinaryReader reader)
+        {
+            return new StickSnapshotPayload
+            {
+                OwnerClientId = reader.ReadUInt64(),
+                Position = ReadVector3(reader),
+                Rotation = ReadQuaternion(reader)
+            };
+        }
+
         private static void WriteVector3(BinaryWriter writer, Vector3Dto value)
         {
             writer.Write(value != null ? value.X : 0f);
             writer.Write(value != null ? value.Y : 0f);
             writer.Write(value != null ? value.Z : 0f);
+        }
+
+        private static void WriteVector2(BinaryWriter writer, Vector2Dto value)
+        {
+            writer.Write(value != null ? value.X : 0f);
+            writer.Write(value != null ? value.Y : 0f);
+        }
+
+        private static Vector2Dto ReadVector2(BinaryReader reader)
+        {
+            return new Vector2Dto
+            {
+                X = reader.ReadSingle(),
+                Y = reader.ReadSingle()
+            };
         }
 
         private static Vector3Dto ReadVector3(BinaryReader reader)

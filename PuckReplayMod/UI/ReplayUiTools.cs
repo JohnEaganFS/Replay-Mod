@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using Unity.VectorGraphics;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -13,6 +15,8 @@ namespace PuckReplayMod
         public static readonly Color FieldColor = new Color(0.15f, 0.15f, 0.15f, 1f);
         public static readonly Color BodyTextColor = new Color(0.82f, 0.86f, 0.9f, 1f);
         public static readonly Color MutedTextColor = new Color(0.68f, 0.72f, 0.76f, 1f);
+        private const string SvgResourcePrefix = "PuckReplayMod.Assets.";
+        private static readonly Dictionary<string, VectorImage> SvgIconCache = new Dictionary<string, VectorImage>();
 
         public static VisualElement CreateConfigurationRow()
         {
@@ -95,6 +99,34 @@ namespace PuckReplayMod
             return button;
         }
 
+        public static VisualElement CreateSvgIcon(string fileName, float size, Color color)
+        {
+            VisualElement icon = new VisualElement();
+            icon.pickingMode = PickingMode.Ignore;
+            icon.style.width = size;
+            icon.style.height = size;
+            icon.style.backgroundSize = new BackgroundSize(BackgroundSizeType.Contain);
+            SetSvgIconColor(icon, color);
+
+            VectorImage image = LoadSvgIcon(fileName);
+            if (image != null)
+            {
+                icon.style.backgroundImage = new StyleBackground(image);
+            }
+
+            return icon;
+        }
+
+        public static void SetSvgIconColor(VisualElement icon, Color color)
+        {
+            if (icon == null)
+            {
+                return;
+            }
+
+            icon.style.unityBackgroundImageTintColor = color;
+        }
+
         public static Button CreateSidebarButton(string text, Action onClick)
         {
             Button button = new Button(onClick)
@@ -156,6 +188,48 @@ namespace PuckReplayMod
             });
         }
 
+        private static VectorImage LoadSvgIcon(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName))
+            {
+                return null;
+            }
+
+            VectorImage cached;
+            if (SvgIconCache.TryGetValue(fileName, out cached))
+            {
+                return cached;
+            }
+
+            string resourceName = SvgResourcePrefix + fileName;
+            try
+            {
+                using (Stream stream = typeof(ReplayUiTools).Assembly.GetManifestResourceStream(resourceName))
+                {
+                    if (stream == null)
+                    {
+                        ReplayModLog.Warning("SVG icon resource not found: " + resourceName);
+                        SvgIconCache[fileName] = null;
+                        return null;
+                    }
+
+                    using (StreamReader reader = new StreamReader(stream))
+                    {
+                        SVGParser.SceneInfo sceneInfo = SVGParser.ImportSVG(reader, 1f, 1f, 0, 0, false);
+                        VectorImage image = VectorUtils.BuildVectorImage(sceneInfo);
+                        SvgIconCache[fileName] = image;
+                        return image;
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Failed to load SVG icon " + fileName + ": " + exception.Message);
+                SvgIconCache[fileName] = null;
+                return null;
+            }
+        }
+
         public static Toggle CreateToggle(bool value, Action<bool> onChanged)
         {
             Toggle toggle = new Toggle();
@@ -198,6 +272,21 @@ namespace PuckReplayMod
             field.style.minWidth = 210f;
             field.style.maxWidth = 210f;
             field.RegisterValueChangedCallback(delegate(ChangeEvent<int> evt)
+            {
+                onChanged(evt.newValue);
+            });
+            StyleTextField(field);
+            return field;
+        }
+
+        public static FloatField CreateFloatField(float value, Action<float> onChanged)
+        {
+            FloatField field = new FloatField();
+            field.value = value;
+            field.style.width = 210f;
+            field.style.minWidth = 210f;
+            field.style.maxWidth = 210f;
+            field.RegisterValueChangedCallback(delegate(ChangeEvent<float> evt)
             {
                 onChanged(evt.newValue);
             });
@@ -249,6 +338,125 @@ namespace PuckReplayMod
             field.tooltip = tooltip ?? string.Empty;
             row.Add(field);
             return row;
+        }
+
+        public static VisualElement CreateFloatRow(string labelText, float value, Action<float> onChanged)
+        {
+            return CreateFloatRow(labelText, null, value, onChanged);
+        }
+
+        public static VisualElement CreateFloatRow(string labelText, string tooltip, float value, Action<float> onChanged)
+        {
+            VisualElement row = CreateConfigurationRow();
+            row.tooltip = tooltip ?? string.Empty;
+            row.Add(CreateConfigurationLabel(labelText, tooltip));
+            FloatField field = CreateFloatField(value, onChanged);
+            field.tooltip = tooltip ?? string.Empty;
+            row.Add(field);
+            return row;
+        }
+
+        public static VisualElement CreateFloatSliderRow(string labelText, string tooltip, float value, float min, float max, Action<float> onChanged)
+        {
+            VisualElement row = CreateConfigurationRow();
+            row.tooltip = tooltip ?? string.Empty;
+            row.Add(CreateConfigurationLabel(labelText, tooltip));
+
+            float clampedValue = Mathf.Clamp(value, min, max);
+            bool isSyncing = false;
+            Slider slider = new Slider();
+            slider.lowValue = min;
+            slider.highValue = max;
+            slider.value = clampedValue;
+            slider.showInputField = true;
+            slider.tooltip = tooltip ?? string.Empty;
+            slider.style.width = 260f;
+            slider.style.minWidth = 260f;
+            slider.style.maxWidth = 260f;
+            slider.style.height = 32f;
+            slider.style.minHeight = 32f;
+            slider.style.maxHeight = 32f;
+            slider.style.fontSize = 14f;
+            slider.style.overflow = Overflow.Visible;
+            StyleSlider(slider);
+
+            slider.RegisterValueChangedCallback(delegate(ChangeEvent<float> evt)
+            {
+                if (isSyncing)
+                {
+                    return;
+                }
+
+                float clamped = Mathf.Clamp(evt.newValue, min, max);
+                isSyncing = true;
+                slider.SetValueWithoutNotify(clamped);
+                isSyncing = false;
+                onChanged(clamped);
+            });
+
+            row.Add(slider);
+            return row;
+        }
+
+        public static VisualElement CreateFloatSliderApplyRow(string labelText, string tooltip, float value, float min, float max, Action<float> onApply)
+        {
+            VisualElement row = CreateConfigurationRow();
+            row.tooltip = tooltip ?? string.Empty;
+            row.Add(CreateConfigurationLabel(labelText, tooltip));
+
+            float clampedValue = Mathf.Clamp(value, min, max);
+            Slider slider = CreateFloatSlider(clampedValue, min, max, tooltip);
+            slider.style.width = 190f;
+            slider.style.minWidth = 190f;
+            slider.style.maxWidth = 190f;
+
+            Button applyButton = CreateButton("Apply", delegate
+            {
+                float clamped = Mathf.Clamp(slider.value, min, max);
+                slider.SetValueWithoutNotify(clamped);
+                onApply(clamped);
+            });
+            applyButton.tooltip = tooltip ?? string.Empty;
+            applyButton.style.width = 64f;
+            applyButton.style.minWidth = 64f;
+            applyButton.style.maxWidth = 64f;
+            applyButton.style.height = 32f;
+            applyButton.style.minHeight = 32f;
+            applyButton.style.maxHeight = 32f;
+            applyButton.style.marginLeft = 8f;
+            applyButton.style.paddingLeft = 0f;
+            applyButton.style.paddingRight = 0f;
+
+            VisualElement controls = new VisualElement();
+            controls.style.flexDirection = FlexDirection.Row;
+            controls.style.alignItems = Align.Center;
+            controls.style.width = 262f;
+            controls.style.minWidth = 262f;
+            controls.style.maxWidth = 262f;
+            controls.Add(slider);
+            controls.Add(applyButton);
+            row.Add(controls);
+            return row;
+        }
+
+        private static Slider CreateFloatSlider(float value, float min, float max, string tooltip)
+        {
+            Slider slider = new Slider();
+            slider.lowValue = min;
+            slider.highValue = max;
+            slider.value = Mathf.Clamp(value, min, max);
+            slider.showInputField = true;
+            slider.tooltip = tooltip ?? string.Empty;
+            slider.style.width = 260f;
+            slider.style.minWidth = 260f;
+            slider.style.maxWidth = 260f;
+            slider.style.height = 32f;
+            slider.style.minHeight = 32f;
+            slider.style.maxHeight = 32f;
+            slider.style.fontSize = 14f;
+            slider.style.overflow = Overflow.Visible;
+            StyleSlider(slider);
+            return slider;
         }
 
         public static void StyleMenuAccessButton(Button referenceButton, Button button)
@@ -337,6 +545,86 @@ namespace PuckReplayMod
                 input.style.paddingTop = 4f;
                 input.style.paddingBottom = 4f;
             });
+        }
+
+        private static void StyleTextField(FloatField field)
+        {
+            field.RegisterCallback<AttachToPanelEvent>(delegate
+            {
+                VisualElement input = field.Q<VisualElement>(null, "unity-base-text-field__input");
+                if (input == null)
+                {
+                    return;
+                }
+
+                input.style.backgroundColor = new StyleColor(FieldColor);
+                input.style.color = Color.white;
+                input.style.paddingLeft = 8f;
+                input.style.paddingRight = 8f;
+                input.style.paddingTop = 4f;
+                input.style.paddingBottom = 4f;
+            });
+        }
+
+        private static void StyleSlider(Slider slider)
+        {
+            slider.RegisterCallback<AttachToPanelEvent>(delegate
+            {
+                ApplySliderStyle(slider);
+                slider.schedule.Execute((Action)delegate
+                {
+                    ApplySliderStyle(slider);
+                }).ExecuteLater(1L);
+            });
+
+            slider.RegisterCallback<GeometryChangedEvent>(delegate
+            {
+                ApplySliderStyle(slider);
+            });
+        }
+
+        private static void ApplySliderStyle(Slider slider)
+        {
+            VisualElement tracker = slider.Q<VisualElement>(null, "unity-base-slider__tracker");
+            if (tracker != null)
+            {
+                tracker.style.backgroundColor = new StyleColor(new Color(0.35f, 0.35f, 0.35f, 1f));
+                tracker.style.height = 4f;
+                tracker.style.borderTopLeftRadius = 2f;
+                tracker.style.borderTopRightRadius = 2f;
+                tracker.style.borderBottomLeftRadius = 2f;
+                tracker.style.borderBottomRightRadius = 2f;
+            }
+
+            VisualElement dragger = slider.Q<VisualElement>(null, "unity-base-slider__dragger");
+            if (dragger != null)
+            {
+                dragger.style.backgroundColor = Color.white;
+                dragger.style.width = 12f;
+                dragger.style.height = 12f;
+                dragger.style.marginTop = -4f;
+                dragger.style.borderTopLeftRadius = 6f;
+                dragger.style.borderTopRightRadius = 6f;
+                dragger.style.borderBottomLeftRadius = 6f;
+                dragger.style.borderBottomRightRadius = 6f;
+            }
+
+            VisualElement draggerBorder = slider.Q<VisualElement>(null, "unity-base-slider__dragger-border");
+            if (draggerBorder != null)
+            {
+                draggerBorder.style.backgroundColor = new StyleColor(FieldColor);
+            }
+
+            VisualElement input = slider.Q<VisualElement>(null, "unity-base-text-field__input");
+            if (input != null)
+            {
+                input.style.backgroundColor = new StyleColor(FieldColor);
+                input.style.color = Color.white;
+                input.style.paddingLeft = 6f;
+                input.style.paddingRight = 6f;
+                input.style.paddingTop = 4f;
+                input.style.paddingBottom = 4f;
+            }
         }
 
         private static void StyleDropdown(VisualElement dropdown)

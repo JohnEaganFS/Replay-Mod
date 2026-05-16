@@ -379,6 +379,8 @@ namespace PuckReplayMod
             EventManager.AddEventListener("Event_Everyone_OnPlayerIsMutedChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.AddEventListener("Event_Everyone_OnPlayerBodySpawned", this.Event_Everyone_OnPlayerBodySpawned);
             EventManager.AddEventListener("Event_Everyone_OnPlayerBodyDespawned", this.Event_Everyone_OnPlayerBodyDespawned);
+            EventManager.AddEventListener("Event_Everyone_OnStickSpawned", this.Event_Everyone_OnStickSpawned);
+            EventManager.AddEventListener("Event_Everyone_OnStickDespawned", this.Event_Everyone_OnStickDespawned);
             EventManager.AddEventListener("Event_Everyone_OnPuckSpawned", this.Event_Everyone_OnPuckSpawned);
             EventManager.AddEventListener("Event_Everyone_OnPuckDespawned", this.Event_Everyone_OnPuckDespawned);
             EventManager.AddEventListener("Event_OnChatMessageAdded", this.Event_OnChatMessageAdded);
@@ -404,6 +406,8 @@ namespace PuckReplayMod
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerIsMutedChanged", this.Event_Everyone_OnPlayerStateChanged);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerBodySpawned", this.Event_Everyone_OnPlayerBodySpawned);
             EventManager.RemoveEventListener("Event_Everyone_OnPlayerBodyDespawned", this.Event_Everyone_OnPlayerBodyDespawned);
+            EventManager.RemoveEventListener("Event_Everyone_OnStickSpawned", this.Event_Everyone_OnStickSpawned);
+            EventManager.RemoveEventListener("Event_Everyone_OnStickDespawned", this.Event_Everyone_OnStickDespawned);
             EventManager.RemoveEventListener("Event_Everyone_OnPuckSpawned", this.Event_Everyone_OnPuckSpawned);
             EventManager.RemoveEventListener("Event_Everyone_OnPuckDespawned", this.Event_Everyone_OnPuckDespawned);
             EventManager.RemoveEventListener("Event_OnChatMessageAdded", this.Event_OnChatMessageAdded);
@@ -501,7 +505,8 @@ namespace PuckReplayMod
             {
                 OwnerClientId = playerBody.OwnerClientId,
                 Position = Vector3Dto.From(playerBody.transform.position),
-                Rotation = QuaternionDto.From(playerBody.transform.rotation)
+                Rotation = QuaternionDto.From(playerBody.transform.rotation),
+                Player = this.BuildPlayerSnapshot(playerBody.Player)
             });
         }
 
@@ -522,7 +527,50 @@ namespace PuckReplayMod
             {
                 OwnerClientId = playerBody.OwnerClientId,
                 Position = Vector3Dto.From(playerBody.transform.position),
-                Rotation = QuaternionDto.From(playerBody.transform.rotation)
+                Rotation = QuaternionDto.From(playerBody.transform.rotation),
+                Player = this.BuildPlayerSnapshot(playerBody.Player)
+            });
+        }
+
+        private void Event_Everyone_OnStickSpawned(Dictionary<string, object> message)
+        {
+            Stick stick = message["stick"] as Stick;
+            if (stick == null || this.ShouldSkipPlayer(stick.Player))
+            {
+                return;
+            }
+
+            if (!this.EnsureRecording("stick observed"))
+            {
+                return;
+            }
+
+            if (stick.Player == null || this.ShouldSkipPlayer(stick.Player))
+            {
+                return;
+            }
+
+            this.RecordEvent("StickSpawned", new StickSnapshotPayload
+            {
+                OwnerClientId = stick.OwnerClientId,
+                Position = Vector3Dto.From(stick.transform.position),
+                Rotation = QuaternionDto.From(stick.transform.rotation)
+            });
+        }
+
+        private void Event_Everyone_OnStickDespawned(Dictionary<string, object> message)
+        {
+            Stick stick = message["stick"] as Stick;
+            if (stick == null || this.ShouldSkipPlayer(stick.Player))
+            {
+                return;
+            }
+
+            this.RecordEvent("StickDespawned", new StickSnapshotPayload
+            {
+                OwnerClientId = stick.OwnerClientId,
+                Position = Vector3Dto.From(stick.transform.position),
+                Rotation = QuaternionDto.From(stick.transform.rotation)
             });
         }
 
@@ -667,6 +715,11 @@ namespace PuckReplayMod
                         Rotation = QuaternionDto.From(player.Stick.transform.rotation)
                     });
                 }
+
+                if (player.PlayerInput)
+                {
+                    frame.PlayerInputs.Add(this.BuildPlayerInputSnapshot(player));
+                }
             }
 
             for (int i = this.activePucks.Count - 1; i >= 0; i--)
@@ -716,7 +769,8 @@ namespace PuckReplayMod
                         {
                             OwnerClientId = player.OwnerClientId,
                             Position = Vector3Dto.From(player.PlayerBody.transform.position),
-                            Rotation = QuaternionDto.From(player.PlayerBody.transform.rotation)
+                            Rotation = QuaternionDto.From(player.PlayerBody.transform.rotation),
+                            Player = this.BuildPlayerSnapshot(player)
                         });
                     }
 
@@ -728,6 +782,11 @@ namespace PuckReplayMod
                             Position = Vector3Dto.From(player.Stick.transform.position),
                             Rotation = QuaternionDto.From(player.Stick.transform.rotation)
                         });
+                    }
+
+                    if (player.PlayerInput)
+                    {
+                        snapshot.PlayerInputs.Add(this.BuildPlayerInputSnapshot(player));
                     }
                 }
             }
@@ -749,6 +808,24 @@ namespace PuckReplayMod
             }
 
             return snapshot;
+        }
+
+        private PlayerInputPayload BuildPlayerInputSnapshot(Player player)
+        {
+            PlayerInput input = player != null ? player.PlayerInput : null;
+            if (input == null)
+            {
+                return new PlayerInputPayload();
+            }
+
+            return new PlayerInputPayload
+            {
+                OwnerClientId = player.OwnerClientId,
+                LookAngleInput = Vector2Dto.From(input.LookAngleInput.ServerValue),
+                BladeAngleInput = input.BladeAngleInput.ServerValue,
+                TrackInput = input.TrackInput.ServerValue,
+                LookInput = input.LookInput.ServerValue
+            };
         }
 
         private PlayerSnapshotPayload BuildPlayerSnapshot(Player player)

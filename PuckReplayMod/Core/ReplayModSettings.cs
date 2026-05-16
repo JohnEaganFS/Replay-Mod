@@ -25,6 +25,13 @@ namespace PuckReplayMod
         Hold
     }
 
+    public enum ReplayPlaybackCameraMode
+    {
+        Free,
+        FirstPerson,
+        ThirdPerson
+    }
+
     public class ReplayModSettings
     {
         private const string Prefix = "PuckReplayMod.";
@@ -49,6 +56,11 @@ namespace PuckReplayMod
         public ReplayOverlayPosition PlaybackTimelinePosition = ReplayOverlayPosition.BottomLeft;
         public bool ShowReplayChat = true;
         public bool ClearChatOnPlaybackStart = true;
+        public float PlaybackThirdPersonCameraDistance = 4.25f;
+        public float PlaybackFirstPersonFov = 90f;
+        public bool EnableFirstPersonCameraSmoothing = true;
+        public float FirstPersonCameraSmoothingSpeed = 18f;
+        public float ManagerUiScale = 1f;
 
         public static ReplayModSettings Load()
         {
@@ -67,7 +79,12 @@ namespace PuckReplayMod
                 ShowPlaybackTimeline = PlayerPrefs.GetInt(Prefix + "ShowPlaybackTimeline", 1) == 1,
                 PlaybackTimelinePosition = LoadEnum(Prefix + "PlaybackTimelinePosition", ReplayOverlayPosition.BottomLeft),
                 ShowReplayChat = PlayerPrefs.GetInt(Prefix + "ShowReplayChat", 1) == 1,
-                ClearChatOnPlaybackStart = PlayerPrefs.GetInt(Prefix + "ClearChatOnPlaybackStart", 1) == 1
+                ClearChatOnPlaybackStart = PlayerPrefs.GetInt(Prefix + "ClearChatOnPlaybackStart", 1) == 1,
+                PlaybackThirdPersonCameraDistance = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "PlaybackThirdPersonCameraDistance", 4.25f), 1.5f, 12f),
+                PlaybackFirstPersonFov = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "PlaybackFirstPersonFov", 90f), 60f, 120f),
+                EnableFirstPersonCameraSmoothing = PlayerPrefs.GetInt(Prefix + "EnableFirstPersonCameraSmoothing", 1) == 1,
+                FirstPersonCameraSmoothingSpeed = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "FirstPersonCameraSmoothingSpeed", 18f), 1f, 60f),
+                ManagerUiScale = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "ManagerUiScale", 1f), 0.85f, 1.3f)
             };
 
             string manualRecordingKey = PlayerPrefs.GetString(Prefix + "ManualRecordingKey", KeyCode.F5.ToString());
@@ -129,6 +146,11 @@ namespace PuckReplayMod
             PlayerPrefs.SetString(Prefix + "PlaybackTimelinePosition", this.PlaybackTimelinePosition.ToString());
             PlayerPrefs.SetInt(Prefix + "ShowReplayChat", this.ShowReplayChat ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "ClearChatOnPlaybackStart", this.ClearChatOnPlaybackStart ? 1 : 0);
+            PlayerPrefs.SetFloat(Prefix + "PlaybackThirdPersonCameraDistance", Mathf.Clamp(this.PlaybackThirdPersonCameraDistance, 1.5f, 12f));
+            PlayerPrefs.SetFloat(Prefix + "PlaybackFirstPersonFov", Mathf.Clamp(this.PlaybackFirstPersonFov, 60f, 120f));
+            PlayerPrefs.SetInt(Prefix + "EnableFirstPersonCameraSmoothing", this.EnableFirstPersonCameraSmoothing ? 1 : 0);
+            PlayerPrefs.SetFloat(Prefix + "FirstPersonCameraSmoothingSpeed", Mathf.Clamp(this.FirstPersonCameraSmoothingSpeed, 1f, 60f));
+            PlayerPrefs.SetFloat(Prefix + "ManagerUiScale", Mathf.Clamp(this.ManagerUiScale, 0.85f, 1.3f));
             PlayerPrefs.Save();
         }
 

@@ -57,7 +57,7 @@ namespace PuckReplayMod
 
             foreach (FileInfo file in files)
             {
-                if (this.HasSummaryCache(file, summaryDirectory))
+                if (this.HasCurrentSummaryCache(file, summaryDirectory))
                 {
                     continue;
                 }
@@ -79,8 +79,9 @@ namespace PuckReplayMod
         public ReplayFileSummary ReadSummary(string filePath, string summaryDirectory)
         {
             bool isBinaryReplay = ReplayBinarySerializer.IsBinaryReplay(filePath);
+            int replayContainerVersion = 0;
             ReplayHeaderDto header = isBinaryReplay
-                ? ReplayBinarySerializer.ReadHeader(filePath)
+                ? ReplayBinarySerializer.ReadHeader(filePath, out replayContainerVersion)
                 : this.ReadHeader(this.ReadRoot(filePath));
             FileInfo file = new FileInfo(filePath);
             ReplayFileSummary cachedSummary = this.TryReadSummaryCache(file, summaryDirectory);
@@ -96,7 +97,7 @@ namespace PuckReplayMod
                 ReplayMagic = header.Magic,
                 ReplayFormatVersion = header.FormatVersion,
                 ReplayContainerFormat = isBinaryReplay ? ReplayModConstants.ReplayBinaryMagic : "JSON",
-                ReplayContainerVersion = isBinaryReplay ? ReplayModConstants.ReplayBinaryFormatVersion : 0,
+                ReplayContainerVersion = replayContainerVersion,
                 ModVersion = header.ModVersion,
                 GameVersion = header.GameVersion,
                 StartedUtcTicks = header.StartedUtcTicks,
@@ -108,7 +109,8 @@ namespace PuckReplayMod
                 HasChat = header.HasChat,
                 HasMarkers = header.HasMarkers,
                 IsFavorite = cachedSummary != null && cachedSummary.IsFavorite,
-                IsMetadataComplete = true
+                IsMetadataComplete = true,
+                SummaryCacheVersion = ReplayModConstants.ReplaySummaryCacheVersion
             };
 
             this.WriteSummaryCache(summary, summaryDirectory);
@@ -253,7 +255,8 @@ namespace PuckReplayMod
                 HasChat = false,
                 HasMarkers = false,
                 IsFavorite = false,
-                IsMetadataComplete = false
+                IsMetadataComplete = false,
+                SummaryCacheVersion = 0
             };
 
             return summary;
@@ -297,13 +300,28 @@ namespace PuckReplayMod
                 HasChat = cache.HasChat,
                 HasMarkers = cache.HasMarkers,
                 IsFavorite = cache.IsFavorite,
-                IsMetadataComplete = true
+                IsMetadataComplete = true,
+                SummaryCacheVersion = cache.CacheVersion
             };
         }
 
-        private bool HasSummaryCache(FileInfo file, string summaryDirectory)
+        private bool HasCurrentSummaryCache(FileInfo file, string summaryDirectory)
         {
-            return File.Exists(GetSummaryPath(file.FullName, summaryDirectory));
+            string summaryPath = GetSummaryPath(file.FullName, summaryDirectory);
+            if (!File.Exists(summaryPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                ReplaySummaryCache cache = JsonConvert.DeserializeObject<ReplaySummaryCache>(File.ReadAllText(summaryPath));
+                return cache != null && cache.CacheVersion >= ReplayModConstants.ReplaySummaryCacheVersion;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private ReplayHeaderDto ReadHeader(JObject root)
@@ -325,7 +343,7 @@ namespace PuckReplayMod
                 throw new InvalidDataException("Replay magic does not match " + ReplayModConstants.ReplayMagic + ".");
             }
 
-            if (header.FormatVersion > 2)
+            if (header.FormatVersion > ReplayModConstants.ReplayDtoFormatVersion)
             {
                 throw new InvalidDataException("Replay format version " + header.FormatVersion + " is newer than this mod supports.");
             }
@@ -357,6 +375,9 @@ namespace PuckReplayMod
                 case "PlayerBodySpawned":
                 case "PlayerBodyDespawned":
                     return payloadToken.ToObject<BodyLifecyclePayload>();
+                case "StickSpawned":
+                case "StickDespawned":
+                    return payloadToken.ToObject<StickSnapshotPayload>();
                 case "PuckSpawned":
                 case "PuckDespawned":
                     return payloadToken.ToObject<PuckLifecyclePayload>();

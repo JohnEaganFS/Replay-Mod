@@ -13,6 +13,7 @@ namespace PuckReplayMod
         private static readonly FieldInfo ScoreboardPlayerMapField = typeof(UIScoreboard).GetField("playerVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo MinimapPlayerBodyMapField = typeof(UIMinimap).GetField("playerBodyVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo MinimapPuckMapField = typeof(UIMinimap).GetField("puckVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly MethodInfo MinimapUpdateMethod = typeof(UIMinimap).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo PlayerUsernamesPlayerBodyMapField = typeof(UIPlayerUsernames).GetField("playerBodyVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
         private readonly ReplayModSettings settings;
         private readonly List<ReplayEventDto> events = new List<ReplayEventDto>();
@@ -443,6 +444,59 @@ namespace PuckReplayMod
                 }
 
                 playerBodyRows.Remove(body);
+            }
+        }
+
+        public static void EnsureReplayObjectsOnMinimap()
+        {
+            UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
+            if (uiManager == null || uiManager.Minimap == null)
+            {
+                return;
+            }
+
+            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+            if (playerManager != null)
+            {
+                foreach (Player player in playerManager.GetReplayPlayers())
+                {
+                    if (player != null && player.PlayerBody != null)
+                    {
+                        uiManager.Minimap.AddPlayerBody(player.PlayerBody);
+                        uiManager.Minimap.StylePlayer(player.PlayerBody);
+                    }
+                }
+            }
+
+            PuckManager puckManager = MonoBehaviourSingleton<PuckManager>.Instance;
+            if (puckManager != null)
+            {
+                foreach (Puck puck in puckManager.GetReplayPucks())
+                {
+                    if (puck != null)
+                    {
+                        uiManager.Minimap.AddPuck(puck);
+                    }
+                }
+            }
+
+            ForceMinimapUpdate(uiManager.Minimap);
+        }
+
+        private static void ForceMinimapUpdate(UIMinimap minimap)
+        {
+            if (minimap == null || MinimapUpdateMethod == null)
+            {
+                return;
+            }
+
+            try
+            {
+                MinimapUpdateMethod.Invoke(minimap, null);
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Failed to force replay minimap update: " + exception.Message);
             }
         }
 

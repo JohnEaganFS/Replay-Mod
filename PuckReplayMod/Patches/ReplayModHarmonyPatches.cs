@@ -1,4 +1,6 @@
 using HarmonyLib;
+using DG.Tweening;
+using System.Collections.Generic;
 using System.Reflection;
 using Unity.Netcode;
 using UnityEngine;
@@ -101,6 +103,76 @@ namespace PuckReplayMod
         }
     }
 
+    [HarmonyPatch(typeof(UIChat), "StartInput")]
+    public static class ChatInputStartDuringReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix()
+        {
+            return !ReplayInputBlocker.ShouldBlockLiveChatDuringPlayback();
+        }
+    }
+
+    [HarmonyPatch(typeof(UIManager), "OnAllChatActionPerformed")]
+    public static class AllChatActionDuringReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix()
+        {
+            return !ReplayInputBlocker.ShouldBlockLiveChatDuringPlayback();
+        }
+    }
+
+    [HarmonyPatch(typeof(UIManager), "OnTeamChatActionPerformed")]
+    public static class TeamChatActionDuringReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix()
+        {
+            return !ReplayInputBlocker.ShouldBlockLiveChatDuringPlayback();
+        }
+    }
+
+    [HarmonyPatch(typeof(UIManagerController), "Event_OnChatMessageAdded")]
+    public static class ChatNotificationSoundDuringReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix()
+        {
+            return !ReplayInputBlocker.IsPlaybackActive();
+        }
+    }
+
+    [HarmonyPatch(typeof(ChatManager), "Client_SendChatMessage")]
+    public static class ChatSendDuringReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix()
+        {
+            return !ReplayInputBlocker.ShouldBlockLiveChatDuringPlayback();
+        }
+    }
+
+    [HarmonyPatch(typeof(ChatManager), "Client_QuickChatAction")]
+    public static class QuickChatActionDuringReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(ChatManager __instance)
+        {
+            if (!ReplayInputBlocker.ShouldBlockLiveChatDuringPlayback())
+            {
+                return true;
+            }
+
+            if (__instance != null)
+            {
+                __instance.SetQuickChatEnabled(false, null);
+            }
+
+            return false;
+        }
+    }
+
     [HarmonyPatch(typeof(Player), "Client_RequestTeamRpc")]
     public static class PlayerRequestTeamDuringReplayPatch
     {
@@ -199,6 +271,46 @@ namespace PuckReplayMod
         }
     }
 
+    [HarmonyPatch(typeof(PlayerBody), "FixedUpdate")]
+    public static class PlayerBodyFixedUpdateDuringPausedReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(PlayerBody __instance)
+        {
+            return !ReplayInputBlocker.IsPausedReplayPlayerBodyDuringPlayback(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(Puck), "FixedUpdate")]
+    public static class PuckFixedUpdateDuringPausedReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(Puck __instance)
+        {
+            return !ReplayInputBlocker.IsPausedReplayPuckDuringPlayback(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(Puck), "OnCollisionExit")]
+    public static class PuckCollisionExitDuringPausedReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(Puck __instance)
+        {
+            return !ReplayInputBlocker.IsPausedReplayPuckDuringPlayback(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(StickPositioner), "FixedUpdate")]
+    public static class StickPositionerFixedUpdateDuringPausedReplayPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(StickPositioner __instance)
+        {
+            return !ReplayInputBlocker.IsPausedReplayStickPositionerDuringPlayback(__instance);
+        }
+    }
+
     [HarmonyPatch(typeof(Player), "Server_SpawnSpectatorCamera")]
     public static class PlayerSpawnSpectatorCameraDuringReplayPatch
     {
@@ -225,6 +337,134 @@ namespace PuckReplayMod
         }
     }
 
+    [HarmonyPatch(typeof(ReplayPlayer), "Server_ReplayEvent")]
+    public static class ReplayPlayerInputReplayEventPatch
+    {
+        private static readonly FieldInfo ReplayPuckNetworkObjectIdMapField = AccessTools.Field(typeof(ReplayPlayer), "replayPuckNetworkObjectIdMap");
+
+        [HarmonyPrefix]
+        public static bool Prefix(ReplayPlayer __instance, string eventName, object eventData)
+        {
+            if (ReplayPlaybackRuntime.ShouldApplyEventsInstantly(__instance) && TryApplyMoveEventInstantly(__instance, eventName, eventData))
+            {
+                return false;
+            }
+
+            if (eventName != "PlayerInput" || !(eventData is ReplayPlayerInput))
+            {
+                return true;
+            }
+
+            ReplayPlayerInput replayPlayerInput = (ReplayPlayerInput)eventData;
+            Player replayPlayer = MonoBehaviourSingleton<PlayerManager>.Instance != null
+                ? MonoBehaviourSingleton<PlayerManager>.Instance.GetReplayPlayerByClientId(replayPlayerInput.OwnerClientId)
+                : null;
+            if (replayPlayer != null && replayPlayer.PlayerInput != null)
+            {
+                NativeReplayPlaybackService.ApplyPlayerInput(replayPlayer.PlayerInput, replayPlayerInput);
+            }
+
+            return false;
+        }
+
+        private static bool TryApplyMoveEventInstantly(ReplayPlayer replayPlayer, string eventName, object eventData)
+        {
+            if (eventName == "PlayerBodyMove" && eventData is ReplayPlayerBodyMove)
+            {
+                ReplayPlayerBodyMove move = (ReplayPlayerBodyMove)eventData;
+                Player player = MonoBehaviourSingleton<PlayerManager>.Instance != null
+                    ? MonoBehaviourSingleton<PlayerManager>.Instance.GetReplayPlayerByClientId(move.OwnerClientId)
+                    : null;
+                if (player == null || player.PlayerBody == null)
+                {
+                    return true;
+                }
+
+                player.PlayerBody.transform.DOKill(false);
+                NativeReplayPlaybackService.ApplyTransformAndRigidbody(player.PlayerBody.transform, player.PlayerBody.Rigidbody, move.Position, move.Rotation);
+                player.PlayerBody.Stamina.Value = move.Stamina;
+                player.PlayerBody.Speed.Value = move.Speed;
+                player.PlayerBody.IsSprinting.Value = move.IsSprinting;
+                player.PlayerBody.IsSliding.Value = move.IsSliding;
+                player.PlayerBody.IsStopping.Value = move.IsStopping;
+                player.PlayerBody.IsExtendedLeft.Value = move.IsExtendedLeft;
+                player.PlayerBody.IsExtendedRight.Value = move.IsExtendedRight;
+                return true;
+            }
+
+            if (eventName == "StickMove" && eventData is ReplayStickMove)
+            {
+                ReplayStickMove move = (ReplayStickMove)eventData;
+                Player player = MonoBehaviourSingleton<PlayerManager>.Instance != null
+                    ? MonoBehaviourSingleton<PlayerManager>.Instance.GetReplayPlayerByClientId(move.OwnerClientId)
+                    : null;
+                if (player == null || player.Stick == null)
+                {
+                    return true;
+                }
+
+                player.Stick.transform.DOKill(false);
+                NativeReplayPlaybackService.ApplyTransformAndRigidbody(player.Stick.transform, player.Stick.Rigidbody, move.Position, move.Rotation);
+                return true;
+            }
+
+            if (eventName == "PuckMove" && eventData is ReplayPuckMove)
+            {
+                ReplayPuckMove move = (ReplayPuckMove)eventData;
+                Puck puck = GetReplayPuck(replayPlayer, move.NetworkObjectId);
+                if (puck == null)
+                {
+                    return true;
+                }
+
+                puck.transform.DOKill(false);
+                NativeReplayPlaybackService.ApplyTransformAndRigidbody(puck.transform, puck.Rigidbody, move.Position, move.Rotation);
+                return true;
+            }
+
+            return false;
+        }
+
+        private static Puck GetReplayPuck(ReplayPlayer replayPlayer, ulong originalNetworkObjectId)
+        {
+            if (replayPlayer == null || ReplayPuckNetworkObjectIdMapField == null || MonoBehaviourSingleton<PuckManager>.Instance == null)
+            {
+                return null;
+            }
+
+            Dictionary<ulong, ulong> puckIdMap = ReplayPuckNetworkObjectIdMapField.GetValue(replayPlayer) as Dictionary<ulong, ulong>;
+            if (puckIdMap == null)
+            {
+                return null;
+            }
+
+            ulong replayNetworkObjectId;
+            return puckIdMap.TryGetValue(originalNetworkObjectId, out replayNetworkObjectId)
+                ? MonoBehaviourSingleton<PuckManager>.Instance.GetReplayPuckByNetworkObjectId(replayNetworkObjectId)
+                : null;
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerInput), "Update")]
+    public static class ReplayPlayerInputUpdateDuringPlaybackPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(PlayerInput __instance)
+        {
+            return !ReplayInputBlocker.IsReplayPlayerInputDuringPlayback(__instance);
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerInput), "UpdateLookAngle")]
+    public static class ReplayPlayerLookInputDuringPlaybackPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(PlayerInput __instance)
+        {
+            return !ReplayInputBlocker.IsReplayPlayerInputDuringPlayback(__instance);
+        }
+    }
+
     [HarmonyPatch(typeof(SpectatorCamera), "OnTick")]
     public static class SpectatorCameraReplayUiInputPatch
     {
@@ -243,6 +483,11 @@ namespace PuckReplayMod
         [HarmonyPrefix]
         public static bool Prefix(SpectatorCamera __instance, float deltaTime)
         {
+            if (ReplayInputBlocker.TryApplyReplayPovCamera(__instance, deltaTime))
+            {
+                return false;
+            }
+
             if (!ReplayInputBlocker.ShouldUsePlaybackUiMouseMode() || __instance == null)
             {
                 return true;
@@ -357,6 +602,11 @@ namespace PuckReplayMod
                 instance.Playback.IsPlaybackActive;
         }
 
+        public static bool ShouldBlockLiveChatDuringPlayback()
+        {
+            return IsPlaybackActive();
+        }
+
         public static bool ShouldUsePlaybackUiMouseMode()
         {
             ReplayModController instance = ReplayModController.Instance;
@@ -367,6 +617,14 @@ namespace PuckReplayMod
                 instance.Ui.IsPlaybackUiInputActive;
         }
 
+        public static bool TryApplyReplayPovCamera(SpectatorCamera spectatorCamera, float deltaTime)
+        {
+            ReplayModController instance = ReplayModController.Instance;
+            return instance != null &&
+                instance.Playback != null &&
+                instance.Playback.TryApplyPovCamera(spectatorCamera, deltaTime);
+        }
+
         public static bool IsReplayStick(Stick stick)
         {
             if (stick == null)
@@ -375,6 +633,54 @@ namespace PuckReplayMod
             }
 
             Player player = stick.Player;
+            return player != null &&
+                player.IsReplay != null &&
+                player.IsReplay.Value;
+        }
+
+        public static bool IsReplayPlayerInputDuringPlayback(PlayerInput playerInput)
+        {
+            if (!IsPlaybackActive() || playerInput == null)
+            {
+                return false;
+            }
+
+            Player player = playerInput.Player;
+            return player != null &&
+                player.IsReplay != null &&
+                player.IsReplay.Value;
+        }
+
+        public static bool IsPausedReplayPlayerBodyDuringPlayback(PlayerBody playerBody)
+        {
+            if (!IsPlaybackActive() || !ReplayPlaybackRuntime.IsPaused || playerBody == null)
+            {
+                return false;
+            }
+
+            Player player = playerBody.Player;
+            return player != null &&
+                player.IsReplay != null &&
+                player.IsReplay.Value;
+        }
+
+        public static bool IsPausedReplayPuckDuringPlayback(Puck puck)
+        {
+            return IsPlaybackActive() &&
+                ReplayPlaybackRuntime.IsPaused &&
+                puck != null &&
+                puck.IsReplay != null &&
+                puck.IsReplay.Value;
+        }
+
+        public static bool IsPausedReplayStickPositionerDuringPlayback(StickPositioner stickPositioner)
+        {
+            if (!IsPlaybackActive() || !ReplayPlaybackRuntime.IsPaused || stickPositioner == null)
+            {
+                return false;
+            }
+
+            Player player = stickPositioner.Player;
             return player != null &&
                 player.IsReplay != null &&
                 player.IsReplay.Value;
