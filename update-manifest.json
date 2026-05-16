@@ -1,6 +1,6 @@
 {
-  "latestVersion": "0.1.1",
+  "latestVersion": "0.1.0",
   "minimumRecommendedVersion": "0.1.0",
   "downloadUrl": "https://steamcommunity.com/sharedfiles/filedetails/?id=3726818657",
-  "notes": "Update check test. This version is only for validating the in-game notification."
+  "notes": "Initial pre-release version."
 }
