@@ -241,6 +241,7 @@ namespace PuckReplayMod
                 {
                     FileName = file.Name,
                     SizeBytes = file.Length,
+                    FileCreatedUtcTicks = file.CreationTimeUtc.Ticks,
                     LastWriteUtcTicks = file.LastWriteTimeUtc.Ticks,
                     ServerName = header != null ? header.ServerName : string.Empty,
                     DisplayName = string.Empty,
@@ -259,7 +260,9 @@ namespace PuckReplayMod
                     HasScoreboard = header != null && header.HasScoreboard,
                     HasChat = header != null && header.HasChat,
                     HasMarkers = header != null && header.HasMarkers,
-                    IsFavorite = false
+                    IsFavorite = false,
+                    SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
+                    SummaryGeneratedByModVersion = ReplayModConstants.ModVersion
                 };
 
                 this.WriteSummaryCache(replayPath, cache);
@@ -301,6 +304,7 @@ namespace PuckReplayMod
             {
                 FileName = file.Name,
                 SizeBytes = file.Length,
+                FileCreatedUtcTicks = file.CreationTimeUtc.Ticks,
                 LastWriteUtcTicks = file.LastWriteTimeUtc.Ticks,
                 ServerName = Path.GetFileNameWithoutExtension(file.Name),
                 DisplayName = string.Empty,
@@ -319,7 +323,9 @@ namespace PuckReplayMod
                 HasScoreboard = false,
                 HasChat = false,
                 HasMarkers = false,
-                IsFavorite = false
+                IsFavorite = false,
+                SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
+                SummaryGeneratedByModVersion = ReplayModConstants.ModVersion
             };
         }
 

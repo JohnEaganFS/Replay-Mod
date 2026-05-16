@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Net;
+using System.Threading.Tasks;
+using Newtonsoft.Json;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UIElements;
@@ -26,6 +29,7 @@ namespace PuckReplayMod
             "Display",
             "Storage",
             "Interface",
+            "About",
             "Advanced"
         };
 
@@ -53,6 +57,9 @@ namespace PuckReplayMod
         private float nextReplayIndexRealtime;
         private float playbackDropdownInteractionUntil;
         private float nextPlaybackUiDebugRealtime;
+        private Task<ReplayUpdateCheckResult> updateCheckTask;
+        private Label updateStatusLabel;
+        private string updateDownloadUrl;
 
         internal ReplayModSettings Settings { get { return this.settings; } }
         internal ClientReplayRecorder Recorder { get { return this.recorder; } }
@@ -148,6 +155,7 @@ namespace PuckReplayMod
             this.RefreshPlaybackStatus();
             this.RefreshPlaybackControls();
             this.TickReplayLibraryIndex();
+            this.PollUpdateCheck();
         }
 
         internal bool IsPlaybackUiInputActive
@@ -406,6 +414,56 @@ namespace PuckReplayMod
 
             GUIUtility.systemCopyBuffer = replay.FilePath;
             ReplayModLog.Info("Copied replay path to clipboard: " + replay.FilePath);
+        }
+
+        internal void CheckForUpdates(Label statusLabel)
+        {
+            this.updateStatusLabel = statusLabel;
+            this.updateDownloadUrl = null;
+
+            if (this.updateCheckTask != null && !this.updateCheckTask.IsCompleted)
+            {
+                this.SetUpdateStatus("Already checking for updates...");
+                return;
+            }
+
+            if (string.IsNullOrEmpty(ReplayModConstants.UpdateManifestUrl))
+            {
+                this.SetUpdateStatus("Update checking is not configured yet. Set ReplayModConstants.UpdateManifestUrl to a GitHub raw manifest URL before release.");
+                return;
+            }
+
+            this.SetUpdateStatus("Checking for updates...");
+            this.updateCheckTask = Task.Run(delegate
+            {
+                return CheckForUpdatesCore();
+            });
+        }
+
+        internal void OpenUpdateDownloadUrl()
+        {
+            string url = !string.IsNullOrEmpty(this.updateDownloadUrl)
+                ? this.updateDownloadUrl
+                : ReplayModConstants.UpdateDownloadUrl;
+            if (string.IsNullOrEmpty(url))
+            {
+                this.SetUpdateStatus("No update page is configured yet.");
+                return;
+            }
+
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = url,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Failed to open update URL " + url + ": " + exception.Message);
+                this.SetUpdateStatus("Could not open update page.");
+            }
         }
 
         internal void RefreshPlaybackStatus()
@@ -1444,6 +1502,7 @@ namespace PuckReplayMod
             this.StorageLabel = null;
             this.StorageUsageLabel = null;
             this.PlaybackLabel = null;
+            this.updateStatusLabel = null;
             this.content = null;
             this.contentHost.Clear();
 
@@ -1485,6 +1544,10 @@ namespace PuckReplayMod
             {
                 ReplayInterfaceSettingsSection.Create(this, this.content);
             }
+            else if (sectionName == "About")
+            {
+                ReplayAboutSection.Create(this, this.content);
+            }
             else if (sectionName == "Advanced")
             {
                 ReplayAdvancedSettingsSection.Create(this, this.content);
@@ -1495,6 +1558,154 @@ namespace PuckReplayMod
             }
 
             this.UpdateSidebarSelection();
+        }
+
+        private void PollUpdateCheck()
+        {
+            if (this.updateCheckTask == null || !this.updateCheckTask.IsCompleted)
+            {
+                return;
+            }
+
+            ReplayUpdateCheckResult result;
+            try
+            {
+                result = this.updateCheckTask.Result;
+            }
+            catch (Exception exception)
+            {
+                result = new ReplayUpdateCheckResult
+                {
+                    Message = "Update check failed: " + exception.GetBaseException().Message
+                };
+            }
+
+            this.updateCheckTask = null;
+            if (result == null)
+            {
+                this.SetUpdateStatus("Update check failed.");
+                return;
+            }
+
+            this.updateDownloadUrl = result.DownloadUrl;
+            this.SetUpdateStatus(result.Message);
+        }
+
+        private void SetUpdateStatus(string message)
+        {
+            if (this.updateStatusLabel != null)
+            {
+                this.updateStatusLabel.text = message;
+            }
+
+            ReplayModLog.Info("Update check: " + message);
+        }
+
+        private static ReplayUpdateCheckResult CheckForUpdatesCore()
+        {
+            try
+            {
+                using (WebClient client = new WebClient())
+                {
+                    client.Headers.Add("User-Agent", "PuckReplayMod/" + ReplayModConstants.ModVersion);
+                    string json = client.DownloadString(ReplayModConstants.UpdateManifestUrl);
+                    ReplayUpdateManifest manifest = JsonConvert.DeserializeObject<ReplayUpdateManifest>(json);
+                    if (manifest == null || string.IsNullOrEmpty(manifest.LatestVersion))
+                    {
+                        return new ReplayUpdateCheckResult
+                        {
+                            Message = "Update manifest did not include a latest version."
+                        };
+                    }
+
+                    string latest = manifest.LatestVersion.Trim();
+                    string minimum = manifest.MinimumRecommendedVersion != null ? manifest.MinimumRecommendedVersion.Trim() : string.Empty;
+                    string downloadUrl = !string.IsNullOrEmpty(manifest.DownloadUrl) ? manifest.DownloadUrl : ReplayModConstants.UpdateDownloadUrl;
+                    int latestCompare = CompareVersions(ReplayModConstants.ModVersion, latest);
+                    int minimumCompare = string.IsNullOrEmpty(minimum) ? 0 : CompareVersions(ReplayModConstants.ModVersion, minimum);
+                    string notes = string.IsNullOrEmpty(manifest.Notes) ? string.Empty : "\n" + manifest.Notes.Trim();
+
+                    if (minimumCompare < 0)
+                    {
+                        return new ReplayUpdateCheckResult
+                        {
+                            DownloadUrl = downloadUrl,
+                            Message = "Update recommended. Installed " + ReplayModConstants.ModVersion + ", recommended " + minimum + ", latest " + latest + "." + notes
+                        };
+                    }
+
+                    if (latestCompare < 0)
+                    {
+                        return new ReplayUpdateCheckResult
+                        {
+                            DownloadUrl = downloadUrl,
+                            Message = "Update available. Installed " + ReplayModConstants.ModVersion + ", latest " + latest + "." + notes
+                        };
+                    }
+
+                    return new ReplayUpdateCheckResult
+                    {
+                        DownloadUrl = downloadUrl,
+                        Message = "Replay Mod is up to date. Installed " + ReplayModConstants.ModVersion + ", latest " + latest + "."
+                    };
+                }
+            }
+            catch (Exception exception)
+            {
+                return new ReplayUpdateCheckResult
+                {
+                    Message = "Update check failed: " + exception.Message
+                };
+            }
+        }
+
+        private static int CompareVersions(string installedVersion, string remoteVersion)
+        {
+            Version installed;
+            Version remote;
+            if (Version.TryParse(NormalizeVersion(installedVersion), out installed) &&
+                Version.TryParse(NormalizeVersion(remoteVersion), out remote))
+            {
+                return installed.CompareTo(remote);
+            }
+
+            return string.Compare(installedVersion ?? string.Empty, remoteVersion ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeVersion(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "0.0.0";
+            }
+
+            value = value.Trim();
+            if (value.StartsWith("v", StringComparison.OrdinalIgnoreCase))
+            {
+                value = value.Substring(1);
+            }
+
+            int suffixIndex = value.IndexOf('-');
+            if (suffixIndex >= 0)
+            {
+                value = value.Substring(0, suffixIndex);
+            }
+
+            return string.IsNullOrEmpty(value) ? "0.0.0" : value;
+        }
+
+        private class ReplayUpdateManifest
+        {
+            public string LatestVersion { get; set; }
+            public string MinimumRecommendedVersion { get; set; }
+            public string DownloadUrl { get; set; }
+            public string Notes { get; set; }
+        }
+
+        private class ReplayUpdateCheckResult
+        {
+            public string Message { get; set; }
+            public string DownloadUrl { get; set; }
         }
 
         private VisualElement CreateSectionContent()

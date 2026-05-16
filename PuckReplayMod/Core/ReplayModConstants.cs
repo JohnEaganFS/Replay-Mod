@@ -5,12 +5,15 @@ namespace PuckReplayMod
         public const string ModName = "Replay Mod";
         public const string ModGuid = "puck.replaymod.client";
         public const string ModVersion = "0.1.0";
+        public const string TargetGameVersion = "323";
         public const string ReplayFileExtension = ".puckreplay";
         public const string ReplaySummaryFileSuffix = ".summary.json";
         public const string ReplayMagic = "PUCK_REPLAY_V2";
         public const string ReplayBinaryMagic = "PRB1";
         public const int ReplayDtoFormatVersion = 3;
         public const int ReplayBinaryFormatVersion = 3;
-        public const int ReplaySummaryCacheVersion = 2;
+        public const int ReplaySummaryCacheVersion = 3;
+        public const string UpdateManifestUrl = "";
+        public const string UpdateDownloadUrl = "";
     }
 }

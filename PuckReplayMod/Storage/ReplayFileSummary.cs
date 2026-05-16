@@ -7,6 +7,7 @@ namespace PuckReplayMod
         public string FilePath;
         public string FileName;
         public long SizeBytes;
+        public long FileCreatedUtcTicks;
         public DateTime LastWriteUtc;
         public string ServerName;
         public string DisplayName;
@@ -28,6 +29,8 @@ namespace PuckReplayMod
         public bool IsFavorite;
         public bool IsMetadataComplete;
         public int SummaryCacheVersion;
+        public long SummaryGeneratedUtcTicks;
+        public string SummaryGeneratedByModVersion;
 
         public float DurationSeconds
         {
@@ -48,6 +51,7 @@ namespace PuckReplayMod
         public int CacheVersion = ReplayModConstants.ReplaySummaryCacheVersion;
         public string FileName;
         public long SizeBytes;
+        public long FileCreatedUtcTicks;
         public long LastWriteUtcTicks;
         public string ServerName;
         public string DisplayName;
@@ -67,5 +71,7 @@ namespace PuckReplayMod
         public bool HasChat;
         public bool HasMarkers;
         public bool IsFavorite;
+        public long SummaryGeneratedUtcTicks;
+        public string SummaryGeneratedByModVersion;
     }
 }

@@ -40,7 +40,7 @@ namespace PuckReplayMod
         public bool EnableManualRecordingHotkey = true;
         public int CaptureTickRate = 30;
         public int StorageLimitMb = 2048;
-        public int MinimumReplayLengthSeconds = 0;
+        public int MinimumReplayLengthSeconds = 10;
         public KeyCode ManualRecordingKey = KeyCode.F5;
         public KeyCode MarkerKey = KeyCode.F4;
         public KeyCode ToggleStatusBadgeKey = KeyCode.F7;
@@ -70,7 +70,7 @@ namespace PuckReplayMod
                 EnableManualRecordingHotkey = PlayerPrefs.GetInt(Prefix + "EnableManualRecordingHotkey", 1) == 1,
                 CaptureTickRate = Mathf.Clamp(PlayerPrefs.GetInt(Prefix + "CaptureTickRate", 30), 5, 120),
                 StorageLimitMb = Mathf.Max(0, PlayerPrefs.GetInt(Prefix + "StorageLimitMb", 2048)),
-                MinimumReplayLengthSeconds = Mathf.Max(0, PlayerPrefs.GetInt(Prefix + "MinimumReplayLengthSeconds", 0)),
+                MinimumReplayLengthSeconds = Mathf.Max(0, PlayerPrefs.GetInt(Prefix + "MinimumReplayLengthSeconds", 10)),
                 EnableLegacyImport = PlayerPrefs.GetInt(Prefix + "EnableLegacyImport", 1) == 1,
                 EnableDebugProfiling = PlayerPrefs.GetInt(Prefix + "EnableDebugProfiling", 0) == 1,
                 StatusIndicatorVisibility = LoadEnum(Prefix + "StatusIndicatorVisibility", ReplayIndicatorVisibility.Always),

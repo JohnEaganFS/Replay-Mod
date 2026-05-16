@@ -17,7 +17,7 @@ namespace PuckReplayMod
         public string Magic = ReplayModConstants.ReplayMagic;
         public int FormatVersion = ReplayModConstants.ReplayDtoFormatVersion;
         public string ModVersion = ReplayModConstants.ModVersion;
-        public string GameVersion = "323";
+        public string GameVersion = ReplayModConstants.TargetGameVersion;
         public string ServerName = "Unknown Server";
         public string RecordedBy = "Unknown Player";
         public long StartedUtcTicks;

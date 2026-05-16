@@ -90,6 +90,7 @@ namespace PuckReplayMod
                 FilePath = filePath,
                 FileName = file.Name,
                 SizeBytes = file.Length,
+                FileCreatedUtcTicks = file.CreationTimeUtc.Ticks,
                 LastWriteUtc = file.LastWriteTimeUtc,
                 ServerName = header.ServerName,
                 DisplayName = cachedSummary != null ? cachedSummary.DisplayName : string.Empty,
@@ -110,7 +111,9 @@ namespace PuckReplayMod
                 HasMarkers = header.HasMarkers,
                 IsFavorite = cachedSummary != null && cachedSummary.IsFavorite,
                 IsMetadataComplete = true,
-                SummaryCacheVersion = ReplayModConstants.ReplaySummaryCacheVersion
+                SummaryCacheVersion = ReplayModConstants.ReplaySummaryCacheVersion,
+                SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
+                SummaryGeneratedByModVersion = ReplayModConstants.ModVersion
             };
 
             this.WriteSummaryCache(summary, summaryDirectory);
@@ -128,6 +131,7 @@ namespace PuckReplayMod
             {
                 FileName = summary.FileName,
                 SizeBytes = summary.SizeBytes,
+                FileCreatedUtcTicks = summary.FileCreatedUtcTicks,
                 LastWriteUtcTicks = summary.LastWriteUtc.Ticks,
                 ServerName = summary.ServerName,
                 DisplayName = summary.DisplayName,
@@ -146,7 +150,9 @@ namespace PuckReplayMod
                 HasScoreboard = summary.HasScoreboard,
                 HasChat = summary.HasChat,
                 HasMarkers = summary.HasMarkers,
-                IsFavorite = summary.IsFavorite
+                IsFavorite = summary.IsFavorite,
+                SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
+                SummaryGeneratedByModVersion = ReplayModConstants.ModVersion
             };
 
             string summaryPath = GetSummaryPath(summary.FilePath, summaryDirectory);
@@ -236,6 +242,7 @@ namespace PuckReplayMod
                 FilePath = file.FullName,
                 FileName = file.Name,
                 SizeBytes = file.Length,
+                FileCreatedUtcTicks = file.CreationTimeUtc.Ticks,
                 LastWriteUtc = file.LastWriteTimeUtc,
                 ServerName = Path.GetFileNameWithoutExtension(file.Name),
                 DisplayName = string.Empty,
@@ -256,7 +263,9 @@ namespace PuckReplayMod
                 HasMarkers = false,
                 IsFavorite = false,
                 IsMetadataComplete = false,
-                SummaryCacheVersion = 0
+                SummaryCacheVersion = 0,
+                SummaryGeneratedUtcTicks = 0L,
+                SummaryGeneratedByModVersion = string.Empty
             };
 
             return summary;
@@ -281,6 +290,7 @@ namespace PuckReplayMod
                 FilePath = file.FullName,
                 FileName = file.Name,
                 SizeBytes = cache.SizeBytes > 0 ? cache.SizeBytes : file.Length,
+                FileCreatedUtcTicks = cache.FileCreatedUtcTicks > 0 ? cache.FileCreatedUtcTicks : file.CreationTimeUtc.Ticks,
                 LastWriteUtc = cache.LastWriteUtcTicks > 0 ? new DateTime(cache.LastWriteUtcTicks, DateTimeKind.Utc) : file.LastWriteTimeUtc,
                 ServerName = cache.ServerName,
                 DisplayName = cache.DisplayName,
@@ -301,7 +311,9 @@ namespace PuckReplayMod
                 HasMarkers = cache.HasMarkers,
                 IsFavorite = cache.IsFavorite,
                 IsMetadataComplete = true,
-                SummaryCacheVersion = cache.CacheVersion
+                SummaryCacheVersion = cache.CacheVersion,
+                SummaryGeneratedUtcTicks = cache.SummaryGeneratedUtcTicks,
+                SummaryGeneratedByModVersion = cache.SummaryGeneratedByModVersion
             };
         }
 
