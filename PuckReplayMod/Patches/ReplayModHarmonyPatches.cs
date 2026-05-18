@@ -1,3 +1,4 @@
+using System;
 using HarmonyLib;
 using DG.Tweening;
 using System.Collections.Generic;
@@ -293,13 +294,124 @@ namespace PuckReplayMod
         }
     }
 
+    [HarmonyPatch(typeof(EventManager), "TriggerEvent")]
+    public static class EventManagerGameStateDuringReplayPlaybackPatch
+    {
+        private static readonly FieldInfo EventsField = AccessTools.Field(typeof(EventManager), "events");
+
+        [HarmonyPrefix]
+        public static bool Prefix(string eventName, ref Dictionary<string, object> message)
+        {
+            if (!ReplayGameStatePlaybackService.IsApplyingReplayGameState || eventName != "Event_Everyone_OnGameStateChanged")
+            {
+                return true;
+            }
+
+            Dictionary<string, Action<Dictionary<string, object>>> events =
+                EventsField != null ? EventsField.GetValue(null) as Dictionary<string, Action<Dictionary<string, object>>> : null;
+            if (events == null || !events.ContainsKey(eventName))
+            {
+                return false;
+            }
+
+            if (message == null)
+            {
+                message = new Dictionary<string, object>
+                {
+                    { "eventName", eventName }
+                };
+            }
+            else if (!message.ContainsKey("eventName"))
+            {
+                message.Add("eventName", eventName);
+            }
+
+            Action<Dictionary<string, object>> action = events[eventName];
+            if (action == null)
+            {
+                return false;
+            }
+
+            foreach (Delegate listener in action.GetInvocationList())
+            {
+                if (IsGameModeStateListener(listener))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    ((Action<Dictionary<string, object>>)listener)(message);
+                }
+                catch (Exception exception)
+                {
+                    ReplayModLog.Warning("Replay game-state UI listener failed: " + exception.Message);
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsGameModeStateListener(Delegate listener)
+        {
+            if (listener == null || listener.Method == null || listener.Method.Name != "Event_Everyone_OnGameStateChanged")
+            {
+                return false;
+            }
+
+            object target = listener.Target;
+            Type type = target != null ? target.GetType() : listener.Method.DeclaringType;
+            while (type != null)
+            {
+                if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(BaseGameMode<>))
+                {
+                    return true;
+                }
+
+                type = type.BaseType;
+            }
+
+            return false;
+        }
+    }
+
     [HarmonyPatch(typeof(Stick), "FixedUpdate")]
     public static class StickFixedUpdateDuringReplayPatch
     {
+        private static readonly FieldInfo BladeAngleStepField = AccessTools.Field(typeof(Stick), "bladeAngleStep");
+        private static readonly FieldInfo RotationContainerField = AccessTools.Field(typeof(Stick), "rotationContainer");
+
         [HarmonyPrefix]
         public static bool Prefix(Stick __instance)
         {
-            return !ReplayInputBlocker.IsReplayStick(__instance);
+            if (!ReplayInputBlocker.IsReplayStick(__instance))
+            {
+                return true;
+            }
+
+            ApplyReplayStickBladeTilt(__instance);
+            return false;
+        }
+
+        private static void ApplyReplayStickBladeTilt(Stick stick)
+        {
+            if (stick == null || BladeAngleStepField == null || RotationContainerField == null)
+            {
+                return;
+            }
+
+            Player player = stick.Player;
+            PlayerInput input = player != null ? player.PlayerInput : null;
+            GameObject rotationContainer = RotationContainerField.GetValue(stick) as GameObject;
+            if (input == null || rotationContainer == null)
+            {
+                return;
+            }
+
+            object bladeAngleStepValue = BladeAngleStepField.GetValue(stick);
+            float bladeAngleStep = bladeAngleStepValue is float ? (float)bladeAngleStepValue : 12.5f;
+            float angle = (float)input.BladeAngleInput.ServerValue * bladeAngleStep;
+            rotationContainer.transform.localRotation = Quaternion.AngleAxis(angle, Vector3.forward);
         }
     }
 

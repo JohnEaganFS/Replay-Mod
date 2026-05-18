@@ -31,7 +31,7 @@ namespace PuckReplayMod
             "Capture",
             "Storage",
             "Interface",
-            "About",
+            "About / Updates",
             "Advanced"
         };
 
@@ -66,10 +66,12 @@ namespace PuckReplayMod
         private float nextPlaybackUiDebugRealtime;
         private Task<ReplayUpdateCheckResult> updateCheckTask;
         private Label updateStatusLabel;
+        private Label updatePatchNotesLabel;
         private Button updateBadgeButton;
         private Button storageBadgeButton;
         private ReplayUpdateStatus updateStatus = ReplayUpdateStatus.Unknown;
         private string updateStatusMessage = "Check whether a newer Replay Mod version is available.";
+        private string updatePatchNotesMessage = "Check for updates to load the latest patch notes.";
         private string updateDownloadUrl;
         private bool hasStartedAutomaticUpdateCheck;
         private bool captureModeActive;
@@ -473,6 +475,21 @@ namespace PuckReplayMod
             ReplayModLog.Info("Copied replay path to clipboard: " + replay.FilePath);
         }
 
+        internal void BindUpdateLabels(Label statusLabel, Label patchNotesLabel)
+        {
+            this.updateStatusLabel = statusLabel;
+            this.updatePatchNotesLabel = patchNotesLabel;
+            if (this.updateStatusLabel != null)
+            {
+                this.updateStatusLabel.text = this.updateStatusMessage;
+            }
+
+            if (this.updatePatchNotesLabel != null)
+            {
+                this.updatePatchNotesLabel.text = this.updatePatchNotesMessage;
+            }
+        }
+
         internal void CheckForUpdates(Label statusLabel)
         {
             this.updateStatusLabel = statusLabel;
@@ -480,6 +497,7 @@ namespace PuckReplayMod
             {
                 this.updateStatus = ReplayUpdateStatus.Unknown;
                 this.updateDownloadUrl = null;
+                this.SetUpdatePatchNotes("Check for updates to load the latest patch notes.");
                 this.RefreshUpdateBadge();
             }
 
@@ -505,6 +523,11 @@ namespace PuckReplayMod
         internal string GetUpdateStatusMessage()
         {
             return this.updateStatusMessage;
+        }
+
+        internal string GetUpdatePatchNotesMessage()
+        {
+            return this.updatePatchNotesMessage;
         }
 
         internal void OpenUpdateDownloadUrl()
@@ -1406,12 +1429,16 @@ namespace PuckReplayMod
                 return;
             }
 
-            bool shouldShowReady = this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.Always;
+            bool shouldShowWithScoreboard = this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.ScoreboardOnly && this.IsScoreboardHeld();
+            bool shouldShowReady = this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.Always ||
+                shouldShowWithScoreboard;
             bool shouldShowPlayback = this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.Always ||
-                this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.RecordingAndPlayback;
+                this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.RecordingAndPlayback ||
+                shouldShowWithScoreboard;
             bool shouldShowRecording = this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.Always ||
                 this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.RecordingAndPlayback ||
-                this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.RecordingOnly;
+                this.settings.StatusIndicatorVisibility == ReplayIndicatorVisibility.RecordingOnly ||
+                shouldShowWithScoreboard;
 
             if (this.recorder.IsRecording)
             {
@@ -2324,12 +2351,10 @@ namespace PuckReplayMod
             this.managerPanel.style.left = new StyleLength(new Length(50f, LengthUnit.Percent));
             this.managerPanel.style.top = new StyleLength(new Length(50f, LengthUnit.Percent));
             this.managerPanel.style.translate = new Translate(new Length(-50f, LengthUnit.Percent), new Length(-50f, LengthUnit.Percent));
-            this.managerPanel.style.width = new StyleLength(new Length(72f, LengthUnit.Percent));
-            this.managerPanel.style.maxWidth = 980f;
-            this.managerPanel.style.minWidth = 660f;
-            this.managerPanel.style.height = new StyleLength(new Length(76f, LengthUnit.Percent));
-            this.managerPanel.style.maxHeight = 720f;
-            this.managerPanel.style.minHeight = 460f;
+            this.managerPanel.style.minWidth = 620f;
+            this.managerPanel.style.maxWidth = new StyleLength(new Length(96f, LengthUnit.Percent));
+            this.managerPanel.style.minHeight = 420f;
+            this.managerPanel.style.maxHeight = new StyleLength(new Length(94f, LengthUnit.Percent));
             this.managerPanel.style.backgroundColor = new StyleColor(ReplayUiTools.PanelColor);
             this.managerPanel.style.display = DisplayStyle.None;
             this.managerPanel.pickingMode = PickingMode.Ignore;
@@ -2337,6 +2362,7 @@ namespace PuckReplayMod
             this.CreateManagerHeader();
             this.CreateManagerBody();
             this.CreateManagerFooter();
+            this.ApplyManagerWindowSize();
             this.ApplyManagerScale();
 
             this.root.Add(this.managerPanel);
@@ -2368,7 +2394,7 @@ namespace PuckReplayMod
 
             this.updateBadgeButton = ReplayUiTools.CreateButton("UPDATE AVAILABLE", delegate
             {
-                this.ShowSection("About");
+                this.ShowSection("About / Updates");
             });
             this.updateBadgeButton.style.height = 32f;
             this.updateBadgeButton.style.minHeight = 32f;
@@ -2467,7 +2493,7 @@ namespace PuckReplayMod
             for (int i = 0; i < this.sectionNames.Count; i++)
             {
                 string sectionName = this.sectionNames[i];
-                Button sectionButton = ReplayUiTools.CreateSidebarButton(sectionName, delegate
+                Button sectionButton = ReplayUiTools.CreateSidebarButton(this.GetSectionDisplayName(sectionName), delegate
                 {
                     this.ShowSection(sectionName);
                 });
@@ -2551,7 +2577,7 @@ namespace PuckReplayMod
             {
                 ReplayInterfaceSettingsSection.Create(this, this.content);
             }
-            else if (sectionName == "About")
+            else if (sectionName == "About / Updates")
             {
                 ReplayAboutSection.Create(this, this.content);
             }
@@ -2600,6 +2626,7 @@ namespace PuckReplayMod
             this.updateStatus = result.Status;
             this.updateDownloadUrl = result.DownloadUrl;
             this.SetUpdateStatus(result.Message);
+            this.SetUpdatePatchNotes(result.PatchNotes);
             this.RefreshUpdateBadge();
         }
 
@@ -2617,6 +2644,18 @@ namespace PuckReplayMod
             ReplayModLog.Info("Update check: " + this.updateStatusMessage);
         }
 
+        private void SetUpdatePatchNotes(string message)
+        {
+            this.updatePatchNotesMessage = string.IsNullOrEmpty(message)
+                ? "No patch notes were provided by the update manifest."
+                : message;
+
+            if (this.updatePatchNotesLabel != null)
+            {
+                this.updatePatchNotesLabel.text = this.updatePatchNotesMessage;
+            }
+        }
+
         private void RefreshUpdateBadge()
         {
             if (this.updateBadgeButton == null)
@@ -2629,6 +2668,7 @@ namespace PuckReplayMod
             this.updateBadgeButton.style.display = shouldShow ? DisplayStyle.Flex : DisplayStyle.None;
             if (!shouldShow)
             {
+                this.UpdateSidebarSelection();
                 return;
             }
 
@@ -2639,6 +2679,7 @@ namespace PuckReplayMod
                 ? new Color(0.9f, 0.28f, 0.2f, 1f)
                 : new Color(0.86f, 0.66f, 0.18f, 1f));
             this.updateBadgeButton.style.color = Color.black;
+            this.UpdateSidebarSelection();
         }
 
         private void RefreshStorageBadge()
@@ -2717,7 +2758,8 @@ namespace PuckReplayMod
                     string downloadUrl = !string.IsNullOrEmpty(manifest.DownloadUrl) ? manifest.DownloadUrl : ReplayModConstants.UpdateDownloadUrl;
                     int latestCompare = CompareVersions(ReplayModConstants.ModVersion, latest);
                     int minimumCompare = string.IsNullOrEmpty(minimum) ? 0 : CompareVersions(ReplayModConstants.ModVersion, minimum);
-                    string notes = string.IsNullOrEmpty(manifest.Notes) ? string.Empty : "\n" + manifest.Notes.Trim();
+                    bool isBehindLatest = latestCompare < 0;
+                    string patchNotes = BuildPatchNotesMessage(manifest, latest, isBehindLatest);
 
                     if (minimumCompare < 0)
                     {
@@ -2725,17 +2767,19 @@ namespace PuckReplayMod
                         {
                             Status = ReplayUpdateStatus.UpdateRecommended,
                             DownloadUrl = downloadUrl,
-                            Message = "Update recommended. Installed " + ReplayModConstants.ModVersion + ", recommended " + minimum + ", latest " + latest + "." + notes
+                            Message = "Update recommended. Installed " + ReplayModConstants.ModVersion + ", recommended " + minimum + ", latest " + latest + ".",
+                            PatchNotes = patchNotes
                         };
                     }
 
-                    if (latestCompare < 0)
+                    if (isBehindLatest)
                     {
                         return new ReplayUpdateCheckResult
                         {
                             Status = ReplayUpdateStatus.UpdateAvailable,
                             DownloadUrl = downloadUrl,
-                            Message = "Update available. Installed " + ReplayModConstants.ModVersion + ", latest " + latest + "." + notes
+                            Message = "Update available. Installed " + ReplayModConstants.ModVersion + ", latest " + latest + ".",
+                            PatchNotes = patchNotes
                         };
                     }
 
@@ -2743,7 +2787,8 @@ namespace PuckReplayMod
                     {
                         Status = ReplayUpdateStatus.UpToDate,
                         DownloadUrl = downloadUrl,
-                        Message = "Replay Mod is up to date. Installed " + ReplayModConstants.ModVersion + ", latest " + latest + "."
+                        Message = "Replay Mod is up to date. Installed " + ReplayModConstants.ModVersion + ", latest " + latest + ".",
+                        PatchNotes = patchNotes
                     };
                 }
             }
@@ -2752,9 +2797,71 @@ namespace PuckReplayMod
                 return new ReplayUpdateCheckResult
                 {
                     Status = ReplayUpdateStatus.Error,
-                    Message = "Update check failed: " + exception.Message
+                    Message = "Update check failed: " + exception.Message,
+                    PatchNotes = "Patch notes could not be loaded because the update check failed."
                 };
             }
+        }
+
+        private static string BuildPatchNotesMessage(ReplayUpdateManifest manifest, string latestVersion, bool isBehindLatest)
+        {
+            List<ReplayUpdateRelease> releases = manifest.Releases ?? new List<ReplayUpdateRelease>();
+            releases.RemoveAll(delegate(ReplayUpdateRelease release)
+            {
+                return release == null || string.IsNullOrEmpty(release.Version) || string.IsNullOrEmpty(release.Notes);
+            });
+            releases.Sort(delegate(ReplayUpdateRelease left, ReplayUpdateRelease right)
+            {
+                return CompareVersions(right.Version, left.Version);
+            });
+
+            if (releases.Count > 0)
+            {
+                List<ReplayUpdateRelease> selected = new List<ReplayUpdateRelease>();
+                for (int i = 0; i < releases.Count; i++)
+                {
+                    ReplayUpdateRelease release = releases[i];
+                    if (isBehindLatest && CompareVersions(ReplayModConstants.ModVersion, release.Version) < 0)
+                    {
+                        selected.Add(release);
+                    }
+                    else if (!isBehindLatest && CompareVersions(release.Version, latestVersion) == 0)
+                    {
+                        selected.Add(release);
+                    }
+
+                    if (selected.Count >= 5)
+                    {
+                        break;
+                    }
+                }
+
+                if (selected.Count == 0)
+                {
+                    selected.Add(releases[0]);
+                }
+
+                string header = isBehindLatest ? "Changes Since Your Version" : "Latest Patch Notes";
+                List<string> blocks = new List<string>
+                {
+                    header
+                };
+                for (int i = 0; i < selected.Count; i++)
+                {
+                    string version = selected[i].Version.Trim();
+                    string notes = selected[i].Notes.Trim();
+                    blocks.Add("v" + version + "\n" + notes);
+                }
+
+                return string.Join("\n\n", blocks.ToArray());
+            }
+
+            if (!string.IsNullOrEmpty(manifest.Notes))
+            {
+                return "Latest Patch Notes - v" + latestVersion + "\n" + manifest.Notes.Trim();
+            }
+
+            return "No patch notes were provided by the update manifest.";
         }
 
         private static int CompareVersions(string installedVersion, string remoteVersion)
@@ -2798,6 +2905,14 @@ namespace PuckReplayMod
             public string MinimumRecommendedVersion { get; set; }
             public string DownloadUrl { get; set; }
             public string Notes { get; set; }
+            public List<ReplayUpdateRelease> Releases { get; set; }
+        }
+
+        private class ReplayUpdateRelease
+        {
+            public string Version { get; set; }
+            public string Date { get; set; }
+            public string Notes { get; set; }
         }
 
         private class ReplayUpdateCheckResult
@@ -2805,6 +2920,7 @@ namespace PuckReplayMod
             public ReplayUpdateStatus Status { get; set; }
             public string Message { get; set; }
             public string DownloadUrl { get; set; }
+            public string PatchNotes { get; set; }
         }
 
         private enum ReplayUpdateStatus
@@ -2841,13 +2957,42 @@ namespace PuckReplayMod
             this.managerPanel.style.scale = new StyleScale(new Scale(new Vector2(scale, scale)));
         }
 
+        internal void ApplyManagerWindowSize()
+        {
+            if (this.managerPanel == null)
+            {
+                return;
+            }
+
+            float widthPercent = this.settings != null ? Mathf.Clamp(this.settings.ManagerWindowWidthPercent, 58f, 94f) : 72f;
+            float heightPercent = this.settings != null ? Mathf.Clamp(this.settings.ManagerWindowHeightPercent, 58f, 92f) : 76f;
+            this.managerPanel.style.width = new StyleLength(new Length(widthPercent, LengthUnit.Percent));
+            this.managerPanel.style.height = new StyleLength(new Length(heightPercent, LengthUnit.Percent));
+        }
+
         private void UpdateSidebarSelection()
         {
             for (int i = 0; i < this.sectionButtons.Count; i++)
             {
+                if (i < this.sectionNames.Count)
+                {
+                    this.sectionButtons[i].text = this.GetSectionDisplayName(this.sectionNames[i]);
+                }
+
                 bool selected = i < this.sectionNames.Count && this.sectionNames[i] == this.selectedSection;
                 ReplayUiTools.SetSidebarButtonSelected(this.sectionButtons[i], selected);
             }
+        }
+
+        private string GetSectionDisplayName(string sectionName)
+        {
+            if (sectionName == "About / Updates" &&
+                (this.updateStatus == ReplayUpdateStatus.UpdateAvailable || this.updateStatus == ReplayUpdateStatus.UpdateRecommended))
+            {
+                return "About / Updates !";
+            }
+
+            return sectionName;
         }
 
         private void ToggleManager()
@@ -3235,6 +3380,23 @@ namespace PuckReplayMod
             }
 
             return keyboard[key] != null && keyboard[key].isPressed;
+        }
+
+        private bool IsScoreboardHeld()
+        {
+            try
+            {
+                if (InputManager.ScoreboardAction != null)
+                {
+                    return InputManager.ScoreboardAction.IsPressed();
+                }
+            }
+            catch
+            {
+            }
+
+            Keyboard keyboard = Keyboard.current;
+            return keyboard != null && keyboard.tabKey != null && keyboard.tabKey.isPressed;
         }
 
         private static bool TryConvertKey(KeyCode keyCode, out Key key)

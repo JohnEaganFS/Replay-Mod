@@ -7,8 +7,8 @@ namespace PuckReplayMod
     {
         public static void Create(ReplayModUiService ui, VisualElement parent)
         {
-            parent.Add(ReplayUiTools.CreateSectionTitle("About"));
-            parent.Add(ReplayUiTools.CreateNote("Version and compatibility information for troubleshooting and updates."));
+            parent.Add(ReplayUiTools.CreateSectionTitle("About / Updates"));
+            parent.Add(ReplayUiTools.CreateNote("Version details, compatibility information, update checks, and latest release notes."));
 
             parent.Add(CreateInfoRow("Installed version", ReplayModConstants.ModVersion));
             parent.Add(CreateInfoRow("Target Puck version", ReplayModConstants.TargetGameVersion));
@@ -22,6 +22,14 @@ namespace PuckReplayMod
 
             Label statusLabel = ReplayUiTools.CreateNote(ui.GetUpdateStatusMessage());
             parent.Add(statusLabel);
+
+            parent.Add(ReplayUiTools.CreateSeparator());
+            parent.Add(ReplayUiTools.CreateHeader("Latest Patch Notes"));
+
+            Label patchNotesLabel = ReplayUiTools.CreateNote(ui.GetUpdatePatchNotesMessage());
+            patchNotesLabel.style.whiteSpace = WhiteSpace.Normal;
+            parent.Add(patchNotesLabel);
+            ui.BindUpdateLabels(statusLabel, patchNotesLabel);
 
             VisualElement actions = new VisualElement();
             actions.style.flexDirection = FlexDirection.Row;

@@ -378,6 +378,7 @@ namespace PuckReplayMod
             slider.style.maxHeight = 32f;
             slider.style.fontSize = 14f;
             slider.style.overflow = Overflow.Visible;
+            slider.style.alignSelf = Align.Center;
             StyleSlider(slider);
 
             slider.RegisterValueChangedCallback(delegate(ChangeEvent<float> evt)
@@ -455,6 +456,7 @@ namespace PuckReplayMod
             slider.style.maxHeight = 32f;
             slider.style.fontSize = 14f;
             slider.style.overflow = Overflow.Visible;
+            slider.style.alignSelf = Align.Center;
             StyleSlider(slider);
             return slider;
         }
@@ -585,11 +587,26 @@ namespace PuckReplayMod
 
         private static void ApplySliderStyle(Slider slider)
         {
+            VisualElement dragContainer = slider.Q<VisualElement>(null, "unity-base-slider__drag-container");
+            if (dragContainer != null)
+            {
+                dragContainer.style.height = 32f;
+                dragContainer.style.minHeight = 32f;
+                dragContainer.style.maxHeight = 32f;
+                dragContainer.style.alignSelf = Align.Center;
+                dragContainer.style.justifyContent = Justify.Center;
+                dragContainer.style.marginTop = 0f;
+                dragContainer.style.marginBottom = 0f;
+            }
+
             VisualElement tracker = slider.Q<VisualElement>(null, "unity-base-slider__tracker");
             if (tracker != null)
             {
                 tracker.style.backgroundColor = new StyleColor(new Color(0.35f, 0.35f, 0.35f, 1f));
                 tracker.style.height = 4f;
+                tracker.style.alignSelf = Align.Center;
+                tracker.style.marginTop = 0f;
+                tracker.style.marginBottom = 0f;
                 tracker.style.borderTopLeftRadius = 2f;
                 tracker.style.borderTopRightRadius = 2f;
                 tracker.style.borderBottomLeftRadius = 2f;
@@ -602,7 +619,8 @@ namespace PuckReplayMod
                 dragger.style.backgroundColor = Color.white;
                 dragger.style.width = 12f;
                 dragger.style.height = 12f;
-                dragger.style.marginTop = -4f;
+                dragger.style.marginTop = 0f;
+                dragger.style.marginBottom = 0f;
                 dragger.style.borderTopLeftRadius = 6f;
                 dragger.style.borderTopRightRadius = 6f;
                 dragger.style.borderBottomLeftRadius = 6f;

@@ -108,6 +108,7 @@ namespace PuckReplayMod
                 "Always",
                 "Recording and playback",
                 "Recording only",
+                "With scoreboard",
                 "Hidden"
             };
         }
@@ -131,6 +132,8 @@ namespace PuckReplayMod
                     return "Recording and playback";
                 case ReplayIndicatorVisibility.RecordingOnly:
                     return "Recording only";
+                case ReplayIndicatorVisibility.ScoreboardOnly:
+                    return "With scoreboard";
                 case ReplayIndicatorVisibility.Hidden:
                     return "Hidden";
                 default:
@@ -146,6 +149,8 @@ namespace PuckReplayMod
                     return ReplayIndicatorVisibility.RecordingAndPlayback;
                 case "Recording only":
                     return ReplayIndicatorVisibility.RecordingOnly;
+                case "With scoreboard":
+                    return ReplayIndicatorVisibility.ScoreboardOnly;
                 case "Hidden":
                     return ReplayIndicatorVisibility.Hidden;
                 default:

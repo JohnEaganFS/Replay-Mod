@@ -17,6 +17,7 @@ namespace PuckReplayMod
         private readonly NativeReplayEventConverter converter = new NativeReplayEventConverter();
         private readonly ReplayModSettings settings;
         private readonly ReplayGameStatePlaybackService gameStatePlayback;
+        private readonly ToasterReskinCompatibility toasterReskinCompatibility = new ToasterReskinCompatibility();
         private readonly List<CameraTargetTimelineEvent> cameraTargetTimeline = new List<CameraTargetTimelineEvent>();
 
         private ReplayPlayer replayPlayer;
@@ -178,6 +179,7 @@ namespace PuckReplayMod
                 this.gameStatePlayback.Start(session);
                 this.gameStatePlayback.ApplyThrough(this.CurrentTick);
                 ReplayGameStatePlaybackService.EnsureReplayObjectsOnMinimap();
+                this.toasterReskinCompatibility.StartPlayback();
             }
 
             return this.IsPlaying;
@@ -200,6 +202,7 @@ namespace PuckReplayMod
             this.EnforcePausedReplayObjectSnapshots();
             this.gameStatePlayback.ApplyThrough(this.CurrentTick);
             this.ApplySlowMotionInterpolation();
+            this.toasterReskinCompatibility.Tick();
         }
 
         public void SetPaused(bool paused)
@@ -386,9 +389,10 @@ namespace PuckReplayMod
             ReplayPlaybackRuntime.SetPaused(wasPaused);
             ReplayPlaybackRuntime.RunImmediateThrough(this.replayPlayer, targetTick);
             this.ApplyLatestTransformsThrough(targetTick);
-            ReplayPlaybackRuntime.SetPaused(wasPaused);
+            ReplayPlaybackRuntime.SetPaused(targetTick >= maxTick || wasPaused);
             this.gameStatePlayback.ApplyThrough(this.CurrentTick);
             ReplayGameStatePlaybackService.EnsureReplayObjectsOnMinimap();
+            this.toasterReskinCompatibility.RequestApply();
             this.ResetFirstPersonCameraSmoothing();
             if (this.cameraMode == ReplayPlaybackCameraMode.FirstPerson)
             {
@@ -434,6 +438,7 @@ namespace PuckReplayMod
             ReplayPlaybackRuntime.SetVisibleTick(this.replayPlayer, targetTick);
             this.gameStatePlayback.ApplyThrough(this.CurrentTick);
             ReplayGameStatePlaybackService.EnsureReplayObjectsOnMinimap();
+            this.toasterReskinCompatibility.RequestApply();
             this.ResetFirstPersonCameraSmoothing();
             if (this.cameraMode == ReplayPlaybackCameraMode.FirstPerson)
             {
@@ -463,6 +468,7 @@ namespace PuckReplayMod
             this.currentTickRate = 30;
             this.replayPlayer = null;
             this.replaySpectatorCameraAdjusted = false;
+            this.toasterReskinCompatibility.StopPlayback();
             this.cameraMode = ReplayPlaybackCameraMode.Free;
             this.cameraTargetClientId = null;
             this.ResetFirstPersonCameraSmoothing();

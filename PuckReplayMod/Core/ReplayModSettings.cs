@@ -16,6 +16,7 @@ namespace PuckReplayMod
         Always,
         RecordingAndPlayback,
         RecordingOnly,
+        ScoreboardOnly,
         Hidden
     }
 
@@ -38,7 +39,9 @@ namespace PuckReplayMod
 
         public bool AutoRecord = true;
         public bool EnableManualRecordingHotkey = true;
+        public bool SplitRecordingsByGameEnd = false;
         public int CaptureTickRate = 30;
+        public int MinimumPlayersToAutoRecord = 1;
         public int StorageLimitMb = 2048;
         public int MinimumReplayLengthSeconds = 10;
         public KeyCode ManualRecordingKey = KeyCode.F5;
@@ -62,6 +65,8 @@ namespace PuckReplayMod
         public bool EnableFirstPersonCameraSmoothing = true;
         public float FirstPersonCameraSmoothingSpeed = 18f;
         public float ManagerUiScale = 1f;
+        public float ManagerWindowWidthPercent = 72f;
+        public float ManagerWindowHeightPercent = 76f;
         public bool CaptureModeHidePlaybackControls = true;
         public bool CaptureModeHideReplayOverlays = true;
         public bool CaptureModeHideGameHud = true;
@@ -75,7 +80,9 @@ namespace PuckReplayMod
             {
                 AutoRecord = PlayerPrefs.GetInt(Prefix + "AutoRecord", 1) == 1,
                 EnableManualRecordingHotkey = PlayerPrefs.GetInt(Prefix + "EnableManualRecordingHotkey", 1) == 1,
+                SplitRecordingsByGameEnd = PlayerPrefs.GetInt(Prefix + "SplitRecordingsByGameEnd", 0) == 1,
                 CaptureTickRate = Mathf.Clamp(PlayerPrefs.GetInt(Prefix + "CaptureTickRate", 30), 5, 120),
+                MinimumPlayersToAutoRecord = Mathf.Clamp(PlayerPrefs.GetInt(Prefix + "MinimumPlayersToAutoRecord", 1), 1, 64),
                 StorageLimitMb = Mathf.Max(0, PlayerPrefs.GetInt(Prefix + "StorageLimitMb", 2048)),
                 MinimumReplayLengthSeconds = Mathf.Max(0, PlayerPrefs.GetInt(Prefix + "MinimumReplayLengthSeconds", 10)),
                 EnableDebugProfiling = PlayerPrefs.GetInt(Prefix + "EnableDebugProfiling", 0) == 1,
@@ -92,6 +99,8 @@ namespace PuckReplayMod
                 EnableFirstPersonCameraSmoothing = PlayerPrefs.GetInt(Prefix + "EnableFirstPersonCameraSmoothing", 1) == 1,
                 FirstPersonCameraSmoothingSpeed = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "FirstPersonCameraSmoothingSpeed", 18f), 1f, 60f),
                 ManagerUiScale = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "ManagerUiScale", 1f), 0.85f, 1.3f),
+                ManagerWindowWidthPercent = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "ManagerWindowWidthPercent", 72f), 58f, 94f),
+                ManagerWindowHeightPercent = Mathf.Clamp(PlayerPrefs.GetFloat(Prefix + "ManagerWindowHeightPercent", 76f), 58f, 92f),
                 CaptureModeHidePlaybackControls = PlayerPrefs.GetInt(Prefix + "CaptureModeHidePlaybackControls", 1) == 1,
                 CaptureModeHideReplayOverlays = PlayerPrefs.GetInt(Prefix + "CaptureModeHideReplayOverlays", 1) == 1,
                 CaptureModeHideGameHud = PlayerPrefs.GetInt(Prefix + "CaptureModeHideGameHud", 1) == 1,
@@ -147,7 +156,9 @@ namespace PuckReplayMod
         {
             PlayerPrefs.SetInt(Prefix + "AutoRecord", this.AutoRecord ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "EnableManualRecordingHotkey", this.EnableManualRecordingHotkey ? 1 : 0);
+            PlayerPrefs.SetInt(Prefix + "SplitRecordingsByGameEnd", this.SplitRecordingsByGameEnd ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "CaptureTickRate", Mathf.Clamp(this.CaptureTickRate, 5, 120));
+            PlayerPrefs.SetInt(Prefix + "MinimumPlayersToAutoRecord", Mathf.Clamp(this.MinimumPlayersToAutoRecord, 1, 64));
             PlayerPrefs.SetInt(Prefix + "StorageLimitMb", Mathf.Max(0, this.StorageLimitMb));
             PlayerPrefs.SetInt(Prefix + "MinimumReplayLengthSeconds", Mathf.Max(0, this.MinimumReplayLengthSeconds));
             PlayerPrefs.SetString(Prefix + "ManualRecordingKey", this.ManualRecordingKey.ToString());
@@ -171,6 +182,8 @@ namespace PuckReplayMod
             PlayerPrefs.SetInt(Prefix + "EnableFirstPersonCameraSmoothing", this.EnableFirstPersonCameraSmoothing ? 1 : 0);
             PlayerPrefs.SetFloat(Prefix + "FirstPersonCameraSmoothingSpeed", Mathf.Clamp(this.FirstPersonCameraSmoothingSpeed, 1f, 60f));
             PlayerPrefs.SetFloat(Prefix + "ManagerUiScale", Mathf.Clamp(this.ManagerUiScale, 0.85f, 1.3f));
+            PlayerPrefs.SetFloat(Prefix + "ManagerWindowWidthPercent", Mathf.Clamp(this.ManagerWindowWidthPercent, 58f, 94f));
+            PlayerPrefs.SetFloat(Prefix + "ManagerWindowHeightPercent", Mathf.Clamp(this.ManagerWindowHeightPercent, 58f, 92f));
             PlayerPrefs.SetInt(Prefix + "CaptureModeHidePlaybackControls", this.CaptureModeHidePlaybackControls ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "CaptureModeHideReplayOverlays", this.CaptureModeHideReplayOverlays ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "CaptureModeHideGameHud", this.CaptureModeHideGameHud ? 1 : 0);

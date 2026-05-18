@@ -31,6 +31,8 @@ namespace PuckReplayMod
         private bool transformCaptureFailureLogged;
         private bool scoreboardCaptureFailureLogged;
         private bool markerInputFailureLogged;
+        private bool currentRecordingIsManual;
+        private bool currentRecordingHasSeenGame;
         private float recordingStartedRealtime;
         private float nextCaptureProfileRealtime;
         private float captureProfileEndRealtime;
@@ -85,6 +87,7 @@ namespace PuckReplayMod
         public void Tick(float deltaTime)
         {
             this.PollPendingSaves();
+            this.PollAutomaticRecordingThreshold();
 
             if (this.startRequested && !this.IsRecording)
             {
@@ -219,6 +222,11 @@ namespace PuckReplayMod
                 return;
             }
 
+            if (!ignoreAutoRecord && !this.HasEnoughPlayersToAutoRecord())
+            {
+                return;
+            }
+
             this.currentTick = 0;
             this.tickAccumulator = 0f;
             this.lastRealtime = Time.realtimeSinceStartup;
@@ -227,6 +235,8 @@ namespace PuckReplayMod
             this.stalledTickWarningLogged = false;
             this.transformCaptureFailureLogged = false;
             this.scoreboardCaptureFailureLogged = false;
+            this.currentRecordingIsManual = ignoreAutoRecord;
+            this.currentRecordingHasSeenGame = false;
             if (this.settings.EnableDebugProfiling)
             {
                 this.ResetCaptureProfile(this.recordingStartedRealtime);
@@ -238,7 +248,9 @@ namespace PuckReplayMod
             this.currentSession.Header.RecordedBy = this.GetRecorderName();
             this.RebuildActiveObjects();
 
-            this.RecordEvent("InitialSnapshot", this.BuildInitialSnapshot());
+            InitialSnapshotPayload initialSnapshot = this.BuildInitialSnapshot();
+            this.TrackGameSeen(initialSnapshot.GameState);
+            this.RecordEvent("InitialSnapshot", initialSnapshot);
             ReplayModLog.Info("Recording started (" + reason + ").");
             Action recordingStateChanged = this.RecordingStateChanged;
             if (recordingStateChanged != null)
@@ -258,6 +270,8 @@ namespace PuckReplayMod
 
             ReplaySessionData session = this.currentSession;
             this.currentSession = null;
+            this.currentRecordingIsManual = false;
+            this.currentRecordingHasSeenGame = false;
             this.tickAccumulator = 0f;
             this.lastRealtime = 0f;
             session.Header.EndedUtcTicks = DateTime.UtcNow.Ticks;
@@ -429,7 +443,9 @@ namespace PuckReplayMod
                 return;
             }
 
-            this.RecordEvent("GameState", this.BuildGameState());
+            GameStatePayload gameState = this.BuildGameState();
+            this.RecordEvent("GameState", gameState);
+            this.HandleSplitRecordingGameState(gameState);
         }
 
         private void Event_Everyone_OnPlayerSpawned(Dictionary<string, object> message)
@@ -678,6 +694,11 @@ namespace PuckReplayMod
                 return false;
             }
 
+            if (!this.HasEnoughPlayersToAutoRecord())
+            {
+                return false;
+            }
+
             this.startRequested = true;
             if (string.IsNullOrEmpty(this.startReason))
             {
@@ -685,6 +706,82 @@ namespace PuckReplayMod
             }
 
             return false;
+        }
+
+        private void HandleSplitRecordingGameState(GameStatePayload gameState)
+        {
+            if (this.settings == null || !this.settings.SplitRecordingsByGameEnd || !this.IsRecording)
+            {
+                return;
+            }
+
+            this.TrackGameSeen(gameState);
+            if (!this.currentRecordingHasSeenGame || !IsGameEndState(gameState))
+            {
+                return;
+            }
+
+            bool wasManualRecording = this.currentRecordingIsManual;
+            this.StopRecording(true, "game ended split");
+            if (wasManualRecording)
+            {
+                this.autoRecordingPausedByManualStop = true;
+                ReplayModLog.Info("Manual recording stopped at game end.");
+                return;
+            }
+
+            if (this.settings.AutoRecord && !this.isRecordingSuppressed && !this.autoRecordingPausedByManualStop && this.HasEnoughPlayersToAutoRecord())
+            {
+                this.startRequested = true;
+                this.startReason = "new game split";
+                ReplayModLog.Info("Queued next automatic recording after game-end split.");
+            }
+        }
+
+        private void TrackGameSeen(GameStatePayload gameState)
+        {
+            if (IsInGameState(gameState))
+            {
+                this.currentRecordingHasSeenGame = true;
+            }
+        }
+
+        private static bool IsInGameState(GameStatePayload gameState)
+        {
+            if (gameState == null || gameState.Period <= 0 || string.IsNullOrEmpty(gameState.Phase))
+            {
+                return false;
+            }
+
+            return gameState.Phase != "None" &&
+                gameState.Phase != "Warmup" &&
+                gameState.Phase != "PreGame" &&
+                gameState.Phase != "GameOver" &&
+                gameState.Phase != "PostGame";
+        }
+
+        private static bool IsGameEndState(GameStatePayload gameState)
+        {
+            return gameState != null &&
+                (gameState.Phase == "GameOver" ||
+                    gameState.Phase == "PostGame" ||
+                    gameState.Phase == "Warmup");
+        }
+
+        private void PollAutomaticRecordingThreshold()
+        {
+            if (this.IsRecording || this.startRequested || this.isRecordingSuppressed || this.autoRecordingPausedByManualStop)
+            {
+                return;
+            }
+
+            if (this.settings == null || !this.settings.AutoRecord || !this.IsInGame() || !this.HasEnoughPlayersToAutoRecord())
+            {
+                return;
+            }
+
+            this.startRequested = true;
+            this.startReason = "minimum player threshold reached";
         }
 
         private void RecordTransformFrame()
@@ -1203,6 +1300,23 @@ namespace PuckReplayMod
         {
             NetworkManager networkManager = NetworkManager.Singleton;
             return networkManager != null && (networkManager.IsClient || networkManager.IsServer || networkManager.IsListening);
+        }
+
+        private bool HasEnoughPlayersToAutoRecord()
+        {
+            int minimumPlayers = this.settings != null ? Mathf.Clamp(this.settings.MinimumPlayersToAutoRecord, 1, 64) : 1;
+            if (minimumPlayers <= 1)
+            {
+                return true;
+            }
+
+            PlayerManager playerManager = MonoBehaviourSingleton<PlayerManager>.Instance;
+            if (playerManager == null)
+            {
+                return false;
+            }
+
+            return playerManager.GetPlayers(false).Count >= minimumPlayers;
         }
 
         private bool ShouldSkipPlayer(Player player)

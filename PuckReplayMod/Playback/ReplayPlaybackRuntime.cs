@@ -78,6 +78,13 @@ namespace PuckReplayMod
                 return true;
             }
 
+            int maxTick = GetMaxEventTick(replayPlayer);
+            if (replayPlayer.Tick > maxTick)
+            {
+                PauseAtEnd(replayPlayer, maxTick);
+                return true;
+            }
+
             float accumulator = GetTickAccumulator() + (Time.deltaTime * replayPlayer.TickRate * PlaybackSpeed);
             int ticksToRun = Mathf.Min(Mathf.FloorToInt(accumulator), MaxTicksPerFrame);
             if (ticksToRun <= 0)
@@ -108,6 +115,11 @@ namespace PuckReplayMod
                 if (replayPlayer.IsReplaying)
                 {
                     replayPlayer.Tick++;
+                    if (replayPlayer.Tick > maxTick)
+                    {
+                        PauseAtEnd(replayPlayer, maxTick);
+                        return true;
+                    }
                 }
             }
 
@@ -127,7 +139,8 @@ namespace PuckReplayMod
                 return;
             }
 
-            LastAppliedTick = Math.Max(0, tick);
+            int maxTick = replayPlayer.EventMap != null && replayPlayer.EventMap.Count > 0 ? GetMaxEventTick(replayPlayer) : int.MaxValue;
+            LastAppliedTick = Math.Min(Math.Max(0, tick), maxTick);
             replayPlayer.Tick = LastAppliedTick + 1;
             SetTickAccumulator(0f);
         }
@@ -144,6 +157,8 @@ namespace PuckReplayMod
                 return;
             }
 
+            int maxTick = GetMaxEventTick(replayPlayer);
+            targetTick = Mathf.Min(targetTick, maxTick);
             int guard = 0;
             while (replayPlayer.IsReplaying && replayPlayer.Tick <= targetTick && guard < MaxTicksPerFrame)
             {
@@ -163,6 +178,12 @@ namespace PuckReplayMod
                 {
                     replayPlayer.Tick++;
                 }
+            }
+
+            if (replayPlayer.IsReplaying && replayPlayer.Tick > maxTick)
+            {
+                PauseAtEnd(replayPlayer, maxTick);
+                return;
             }
 
             SetTickAccumulator(0f);
@@ -186,6 +207,28 @@ namespace PuckReplayMod
             }
 
             return Mathf.Clamp01(GetTickAccumulator());
+        }
+
+        private static int GetMaxEventTick(ReplayPlayer replayPlayer)
+        {
+            if (replayPlayer == null || replayPlayer.EventMap == null || replayPlayer.EventMap.Count == 0)
+            {
+                return 0;
+            }
+
+            return replayPlayer.EventMap.Keys[replayPlayer.EventMap.Keys.Count - 1];
+        }
+
+        private static void PauseAtEnd(ReplayPlayer replayPlayer, int maxTick)
+        {
+            LastAppliedTick = Math.Max(0, maxTick);
+            if (replayPlayer != null)
+            {
+                replayPlayer.Tick = LastAppliedTick + 1;
+            }
+
+            IsPaused = true;
+            SetTickAccumulator(0f);
         }
 
         private static float GetTickAccumulator()

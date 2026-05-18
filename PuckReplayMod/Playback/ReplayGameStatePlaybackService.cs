@@ -25,6 +25,8 @@ namespace PuckReplayMod
         private int lastAppliedTick = -1;
         private GameStatePayload gameState;
 
+        public static bool IsApplyingReplayGameState { get; private set; }
+
         public ReplayGameStatePlaybackService(ReplayModSettings settings)
         {
             this.settings = settings;
@@ -240,14 +242,22 @@ namespace PuckReplayMod
                 return;
             }
 
-            gameManager.Server_SetGameState(
-                ParseEnum(this.gameState.Phase, GamePhase.None),
-                Math.Max(0, this.gameState.Tick),
-                Math.Max(0, this.gameState.Period),
-                Math.Max(0, this.gameState.BlueScore),
-                Math.Max(0, this.gameState.RedScore),
-                this.gameState.IsOvertime);
-            gameManager.Server_StopTicking();
+            try
+            {
+                IsApplyingReplayGameState = true;
+                gameManager.Server_SetGameState(
+                    ParseEnum(this.gameState.Phase, GamePhase.None),
+                    Math.Max(0, this.gameState.Tick),
+                    Math.Max(0, this.gameState.Period),
+                    Math.Max(0, this.gameState.BlueScore),
+                    Math.Max(0, this.gameState.RedScore),
+                    this.gameState.IsOvertime);
+                gameManager.Server_StopTicking();
+            }
+            finally
+            {
+                IsApplyingReplayGameState = false;
+            }
         }
 
         private void ApplyPlayerStates()

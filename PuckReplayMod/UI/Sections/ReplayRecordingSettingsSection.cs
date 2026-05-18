@@ -27,6 +27,26 @@ namespace PuckReplayMod
                 ui.SaveSettings();
             }));
 
+            parent.Add(ReplayUiTools.CreateToggleRow(
+                "Split when game ends",
+                "Saves the current recording when a game ends. Automatic recording starts a new file if recording conditions are still met; manual recording stops.",
+                ui.Settings.SplitRecordingsByGameEnd,
+                delegate(bool value)
+            {
+                ui.Settings.SplitRecordingsByGameEnd = value;
+                ui.SaveSettings();
+            }));
+
+            parent.Add(ReplayUiTools.CreateIntegerRow(
+                "Minimum players to record",
+                "Automatic recording starts only when at least this many non-replay players are in the server. Manual recording hotkeys ignore this limit.",
+                ui.Settings.MinimumPlayersToAutoRecord,
+                delegate(int value)
+            {
+                ui.Settings.MinimumPlayersToAutoRecord = Mathf.Clamp(value, 1, 64);
+                ui.SaveSettings();
+            }));
+
             parent.Add(ReplayUiTools.CreateDropdownRow(
                 "Record rate",
                 GetCaptureRateTooltip(ui.Settings.CaptureTickRate),
