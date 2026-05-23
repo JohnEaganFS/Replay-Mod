@@ -12,15 +12,8 @@ namespace PuckReplayMod
             parent.Add(ReplayUiTools.CreateSectionTitle("Hotkeys"));
             parent.Add(ReplayUiTools.CreateNote("Choose the keys Replay Mod listens for while you are in game."));
 
-            parent.Add(ReplayUiTools.CreateToggleRow(
-                "Manual recording",
-                "Lets you start or stop recording while you are in a match. If auto-record is on, stopping manually pauses auto-recording until you leave that match.",
-                ui.Settings.EnableManualRecordingHotkey,
-                delegate(bool value)
-            {
-                ui.Settings.EnableManualRecordingHotkey = value;
-                ui.SaveSettings();
-            }));
+            parent.Add(ReplayUiTools.CreateHeader("Recording"));
+            parent.Add(ReplayUiTools.CreateNote("Manual start/stop works in any recording mode. If Save on disconnect is off during an automatic recording, the recording hotkey first marks the current recording to save."));
 
             parent.Add(CreateKeybindRow(
                 "Start/stop recording",
@@ -71,7 +64,7 @@ namespace PuckReplayMod
 
             parent.Add(CreateKeybindRow(
                 "Toggle capture mode",
-                "Press this while watching a replay to hide or restore the UI elements selected in the Capture section.",
+                "Press this while watching a replay to hide or restore the UI elements selected in the Playback section.",
                 ui.Settings.CaptureModeKey,
                 delegate(KeyCode value)
             {
@@ -103,11 +96,12 @@ namespace PuckReplayMod
         private static VisualElement CreateKeybindRow(string labelText, string tooltip, KeyCode currentKey, Action<KeyCode> onChanged)
         {
             VisualElement row = ReplayUiTools.CreateConfigurationRow();
+            ReplayUiTools.AttachHoverTooltip(row, tooltip);
             row.tooltip = tooltip ?? string.Empty;
             row.Add(ReplayUiTools.CreateConfigurationLabel(labelText, tooltip));
 
             Button button = ReplayUiTools.CreateButton(FormatKey(currentKey), null);
-            button.tooltip = tooltip ?? string.Empty;
+            button.tooltip = string.IsNullOrEmpty(tooltip) ? "Click, then press a key. Escape cancels." : tooltip + " Click, then press a key. Escape cancels.";
             button.style.width = 210f;
             button.style.minWidth = 210f;
             button.style.maxWidth = 210f;

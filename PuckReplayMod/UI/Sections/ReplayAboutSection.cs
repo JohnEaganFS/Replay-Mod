@@ -40,10 +40,12 @@ namespace PuckReplayMod
             {
                 ui.CheckForUpdates(statusLabel);
             });
+            checkButton.tooltip = "Check the GitHub-hosted update manifest for the latest Replay Mod version.";
             checkButton.style.marginRight = 8f;
             actions.Add(checkButton);
 
             Button openButton = ReplayUiTools.CreateButton("OPEN UPDATE PAGE", ui.OpenUpdateDownloadUrl);
+            openButton.tooltip = "Open the Steam Workshop page for Replay Mod.";
             actions.Add(openButton);
         }
 

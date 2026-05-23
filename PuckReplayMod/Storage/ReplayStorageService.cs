@@ -20,6 +20,10 @@ namespace PuckReplayMod
 
         public string TempDirectory { get; private set; }
 
+        public string ImportsDirectory { get; private set; }
+
+        public string ExportsDirectory { get; private set; }
+
         private readonly object saveLock = new object();
 
         public void Initialize()
@@ -28,11 +32,15 @@ namespace PuckReplayMod
             this.ReplaysDirectory = Path.Combine(this.RootDirectory, "Replays");
             this.SummariesDirectory = Path.Combine(this.RootDirectory, "Summaries");
             this.TempDirectory = Path.Combine(this.RootDirectory, "Temp");
+            this.ImportsDirectory = Path.Combine(this.RootDirectory, "Imports");
+            this.ExportsDirectory = Path.Combine(this.RootDirectory, "Exports");
 
             Directory.CreateDirectory(this.RootDirectory);
             Directory.CreateDirectory(this.ReplaysDirectory);
             Directory.CreateDirectory(this.SummariesDirectory);
             Directory.CreateDirectory(this.TempDirectory);
+            Directory.CreateDirectory(this.ImportsDirectory);
+            Directory.CreateDirectory(this.ExportsDirectory);
         }
 
         public string SaveReplay(ReplaySessionData session)
@@ -220,6 +228,134 @@ namespace PuckReplayMod
             ReplayModLog.Info((isFavorite ? "Favorited replay: " : "Unfavorited replay: ") + filePath);
         }
 
+        public string ImportReplay(string sourcePath)
+        {
+            if (string.IsNullOrEmpty(sourcePath))
+            {
+                throw new ArgumentException("Replay path is empty.", "sourcePath");
+            }
+
+            sourcePath = sourcePath.Trim().Trim('"');
+            FileInfo source = new FileInfo(sourcePath);
+            if (!source.Exists)
+            {
+                throw new FileNotFoundException("Replay file not found.", sourcePath);
+            }
+
+            if (!string.Equals(source.Extension, ReplayModConstants.ReplayFileExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("Only " + ReplayModConstants.ReplayFileExtension + " files can be imported.");
+            }
+
+            string replayDirectory = Path.GetFullPath(this.ReplaysDirectory).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            string sourceFullPath = Path.GetFullPath(source.FullName);
+            if (sourceFullPath.StartsWith(replayDirectory, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("That replay is already in the Replay Mod library.");
+            }
+
+            Directory.CreateDirectory(this.ReplaysDirectory);
+            Directory.CreateDirectory(this.TempDirectory);
+
+            string destinationPath = this.GetUniqueFilePath(this.ReplaysDirectory, source.Name);
+            string tempPath = this.GetUniqueFilePath(this.TempDirectory, Path.GetFileName(destinationPath));
+
+            try
+            {
+                File.Copy(source.FullName, tempPath, true);
+                new ReplayFileReader().ReadSummary(tempPath, this.TempDirectory);
+                this.DeleteSummaryFor(tempPath, this.TempDirectory);
+                File.Move(tempPath, destinationPath);
+                ReplayFileSummary summary = new ReplayFileReader().ReadSummary(destinationPath, this.SummariesDirectory);
+                summary.IsImported = true;
+                summary.ImportedUtcTicks = DateTime.UtcNow.Ticks;
+                new ReplayFileReader().WriteSummaryCache(summary, this.SummariesDirectory);
+                ReplayModLog.Info("Imported replay: " + destinationPath);
+                return destinationPath;
+            }
+            catch
+            {
+                try
+                {
+                    if (File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    this.DeleteSummaryFor(tempPath, this.TempDirectory);
+                }
+                catch
+                {
+                }
+
+                throw;
+            }
+        }
+
+        public ReplayImportBatchResult ImportReplaysFromImportsFolder()
+        {
+            Directory.CreateDirectory(this.ImportsDirectory);
+            FileInfo[] files = new DirectoryInfo(this.ImportsDirectory)
+                .GetFiles("*" + ReplayModConstants.ReplayFileExtension, SearchOption.TopDirectoryOnly)
+                .OrderBy(file => file.Name)
+                .ToArray();
+
+            ReplayImportBatchResult result = new ReplayImportBatchResult
+            {
+                FoundCount = files.Length
+            };
+
+            if (files.Length == 0)
+            {
+                return result;
+            }
+
+            string importedDirectory = Path.Combine(this.ImportsDirectory, "Imported");
+            Directory.CreateDirectory(importedDirectory);
+
+            foreach (FileInfo file in files)
+            {
+                try
+                {
+                    this.ImportReplay(file.FullName);
+                    result.ImportedCount++;
+                    string archivePath = this.GetUniqueFilePath(importedDirectory, file.Name);
+                    File.Move(file.FullName, archivePath);
+                }
+                catch (Exception exception)
+                {
+                    result.FailedCount++;
+                    result.Errors.Add(file.Name + ": " + exception.Message);
+                    ReplayModLog.Warning("Failed to import replay from Imports folder " + file.FullName + ": " + exception.Message);
+                }
+            }
+
+            return result;
+        }
+
+        public string ExportReplay(string filePath, string displayName)
+        {
+            FileInfo file = this.GetValidatedReplayFile(filePath, true);
+            Directory.CreateDirectory(this.ExportsDirectory);
+
+            string baseName = this.SanitizeFileName(displayName);
+            if (string.IsNullOrEmpty(baseName))
+            {
+                baseName = Path.GetFileNameWithoutExtension(file.Name);
+            }
+
+            string destinationPath = this.GetUniqueFilePath(this.ExportsDirectory, baseName + ReplayModConstants.ReplayFileExtension);
+            File.Copy(file.FullName, destinationPath, false);
+            ReplayModLog.Info("Exported replay: " + destinationPath);
+            return destinationPath;
+        }
+
         private bool IsReplayShorterThan(string filePath, int minimumLengthSeconds)
         {
             ReplayFileSummary summary = new ReplayFileReader().ReadSummary(filePath, this.SummariesDirectory);
@@ -271,6 +407,8 @@ namespace PuckReplayMod
                     TimelineEvents = timelineEvents,
                     GameSegments = gameSegments,
                     IsFavorite = false,
+                    IsImported = false,
+                    ImportedUtcTicks = 0L,
                     SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
                     SummaryGeneratedByModVersion = ReplayModConstants.ModVersion
                 };
@@ -292,6 +430,15 @@ namespace PuckReplayMod
         private void DeleteReplaySummary(string replayPath)
         {
             string summaryPath = ReplayFileReader.GetSummaryPath(replayPath, this.SummariesDirectory);
+            if (File.Exists(summaryPath))
+            {
+                File.Delete(summaryPath);
+            }
+        }
+
+        private void DeleteSummaryFor(string replayPath, string summaryDirectory)
+        {
+            string summaryPath = ReplayFileReader.GetSummaryPath(replayPath, summaryDirectory);
             if (File.Exists(summaryPath))
             {
                 File.Delete(summaryPath);
@@ -339,6 +486,8 @@ namespace PuckReplayMod
                 TimelineEvents = new List<ReplayTimelineEntrySummary>(),
                 GameSegments = new List<ReplayGameSegmentSummary>(),
                 IsFavorite = false,
+                IsImported = false,
+                ImportedUtcTicks = 0L,
                 SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
                 SummaryGeneratedByModVersion = ReplayModConstants.ModVersion
             };
@@ -378,6 +527,47 @@ namespace PuckReplayMod
 
             return file;
         }
+
+        private string GetUniqueFilePath(string directory, string fileName)
+        {
+            string extension = Path.GetExtension(fileName);
+            string baseName = Path.GetFileNameWithoutExtension(fileName);
+            if (string.IsNullOrEmpty(baseName))
+            {
+                baseName = "replay";
+            }
+
+            string candidate = Path.Combine(directory, baseName + extension);
+            int index = 2;
+            while (File.Exists(candidate))
+            {
+                candidate = Path.Combine(directory, baseName + "_" + index + extension);
+                index++;
+            }
+
+            return candidate;
+        }
+
+        private string SanitizeFileName(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return string.Empty;
+            }
+
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            char[] chars = value.Trim().ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (Array.IndexOf(invalidChars, chars[i]) >= 0)
+                {
+                    chars[i] = '_';
+                }
+            }
+
+            string sanitized = new string(chars).Trim();
+            return sanitized.Length > 64 ? sanitized.Substring(0, 64).Trim() : sanitized;
+        }
     }
 
     public class ReplaySaveResult
@@ -387,5 +577,13 @@ namespace PuckReplayMod
         public long SizeBytes;
         public long ElapsedMilliseconds;
         public string ErrorMessage;
+    }
+
+    public class ReplayImportBatchResult
+    {
+        public int FoundCount;
+        public int ImportedCount;
+        public int FailedCount;
+        public List<string> Errors = new List<string>();
     }
 }

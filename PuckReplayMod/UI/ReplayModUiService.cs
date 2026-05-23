@@ -26,13 +26,12 @@ namespace PuckReplayMod
         {
             "Library",
             "Recording",
+            "Playback",
+            "Display / Interface",
             "Hotkeys",
-            "Display",
-            "Capture",
             "Storage",
-            "Interface",
-            "About / Updates",
-            "Advanced"
+            "Advanced",
+            "About / Updates"
         };
 
         private VisualElement root;
@@ -59,8 +58,20 @@ namespace PuckReplayMod
         private bool playbackUiMouseRequiredApplied;
         private bool mainMenuButtonAttached;
         private bool pauseMenuButtonAttached;
+        private Button mainMenuReplayButton;
+        private Button pauseMenuReplayButton;
+        private Label mainMenuReplayUpdateBadge;
+        private Label pauseMenuReplayUpdateBadge;
         private bool isMainMenuVisible = true;
         private string selectedSection = "Library";
+        private bool isReplayImportPanelVisible;
+        private string replayImportStatusMessage = string.Empty;
+        private string replayLibraryStatusMessage = string.Empty;
+        private bool replayLibraryStatusIsError;
+        private string replayLibrarySearchText = string.Empty;
+        private string replayLibraryFilterMode = "All";
+        private string replayLibrarySortCategory = "Recorded date";
+        private string replayLibrarySortDirection = "Descending";
         private float nextReplayIndexRealtime;
         private float playbackDropdownInteractionUntil;
         private float nextPlaybackUiDebugRealtime;
@@ -97,6 +108,14 @@ namespace PuckReplayMod
         internal Label StatusLabel { get { return this.statusLabel; } }
         internal Label TimelineLabel { get { return this.timelineLabel; } }
         internal bool CaptureModeActive { get { return this.captureModeActive; } }
+        internal bool IsReplayImportPanelVisible { get { return this.isReplayImportPanelVisible; } }
+        internal string ReplayImportStatusMessage { get { return this.replayImportStatusMessage; } }
+        internal string ReplayLibraryStatusMessage { get { return this.replayLibraryStatusMessage; } }
+        internal bool ReplayLibraryStatusIsError { get { return this.replayLibraryStatusIsError; } }
+        internal string ReplayLibrarySearchText { get { return this.replayLibrarySearchText; } }
+        internal string ReplayLibraryFilterMode { get { return this.replayLibraryFilterMode; } }
+        internal string ReplayLibrarySortCategory { get { return this.replayLibrarySortCategory; } }
+        internal string ReplayLibrarySortDirection { get { return this.replayLibrarySortDirection; } }
 
         public ReplayModUiService(ReplayModSettings settings, ClientReplayRecorder recorder, ReplayStorageService storage, ReplayFileReader reader, ReplayPlaybackService playback)
         {
@@ -183,6 +202,10 @@ namespace PuckReplayMod
             this.isMainMenuVisible = true;
             this.mainMenuButtonAttached = false;
             this.pauseMenuButtonAttached = false;
+            this.mainMenuReplayButton = null;
+            this.pauseMenuReplayButton = null;
+            this.mainMenuReplayUpdateBadge = null;
+            this.pauseMenuReplayUpdateBadge = null;
             this.captureModeActive = false;
         }
 
@@ -268,6 +291,10 @@ namespace PuckReplayMod
                 this.isManagerVisible = false;
                 this.mainMenuButtonAttached = false;
                 this.pauseMenuButtonAttached = false;
+                this.mainMenuReplayButton = null;
+                this.pauseMenuReplayButton = null;
+                this.mainMenuReplayUpdateBadge = null;
+                this.pauseMenuReplayUpdateBadge = null;
             }
 
             if (this.root != null)
@@ -304,7 +331,13 @@ namespace PuckReplayMod
             }
 
             VisualElement mainMenu = rootVisualElement != null ? rootVisualElement.Q<VisualElement>("MainMenu") : null;
-            this.mainMenuButtonAttached = this.AttachReplayButton(mainMenu, "PuckReplayModMainMenuButton");
+            Button button;
+            Label badge;
+            this.mainMenuButtonAttached = this.AttachReplayButton(mainMenu, "PuckReplayModMainMenuButton", out button, out badge);
+            this.mainMenuReplayButton = button;
+            this.mainMenuReplayUpdateBadge = badge;
+            this.RefreshMenuUpdateBadges();
+            this.StartAutomaticUpdateCheck();
         }
 
         public void AttachPauseMenuButton(VisualElement rootVisualElement)
@@ -315,7 +348,13 @@ namespace PuckReplayMod
             }
 
             VisualElement pauseMenu = rootVisualElement != null ? rootVisualElement.Q<VisualElement>("PauseMenu") : null;
-            this.pauseMenuButtonAttached = this.AttachReplayButton(pauseMenu, "PuckReplayModPauseMenuButton");
+            Button button;
+            Label badge;
+            this.pauseMenuButtonAttached = this.AttachReplayButton(pauseMenu, "PuckReplayModPauseMenuButton", out button, out badge);
+            this.pauseMenuReplayButton = button;
+            this.pauseMenuReplayUpdateBadge = badge;
+            this.RefreshMenuUpdateBadges();
+            this.StartAutomaticUpdateCheck();
         }
 
         internal void SaveSettings()
@@ -338,13 +377,37 @@ namespace PuckReplayMod
                 replayCount = Directory.GetFiles(this.storage.ReplaysDirectory, "*" + ReplayModConstants.ReplayFileExtension).Length;
             }
 
-            string recordingState = this.recorder.IsRecording ? "Recording now" : (this.settings.AutoRecord ? "Ready to record" : "Automatic recording is off");
+            string recordingState = this.recorder.IsRecording ? "Recording now" : (this.settings.RecordingMode == ReplayRecordingMode.AutomaticSave ? "Ready to record" : "Manual recording mode");
             this.StorageLabel.text = "Saved replays: " + replayCount + "\nStatus: " + recordingState + "\nRecord rate: " + ReplayRecordingSettingsSection.FormatCaptureRate(this.settings.CaptureTickRate);
         }
 
         internal void RefreshReplayList()
         {
             ReplayLibrarySection.RefreshReplayList(this);
+        }
+
+        internal void SetReplayLibrarySearchText(string value)
+        {
+            this.replayLibrarySearchText = value ?? string.Empty;
+            this.RefreshReplayList();
+        }
+
+        internal void SetReplayLibraryFilterMode(string value)
+        {
+            this.replayLibraryFilterMode = string.IsNullOrEmpty(value) ? "All" : value;
+            this.RefreshReplayList();
+        }
+
+        internal void SetReplayLibrarySortCategory(string value)
+        {
+            this.replayLibrarySortCategory = string.IsNullOrEmpty(value) ? "Recorded date" : value;
+            this.RefreshReplayList();
+        }
+
+        internal void SetReplayLibrarySortDirection(string value)
+        {
+            this.replayLibrarySortDirection = string.IsNullOrEmpty(value) ? "Descending" : value;
+            this.RefreshReplayList();
         }
 
         internal void RefreshStorageUsage()
@@ -473,6 +536,116 @@ namespace PuckReplayMod
 
             GUIUtility.systemCopyBuffer = replay.FilePath;
             ReplayModLog.Info("Copied replay path to clipboard: " + replay.FilePath);
+        }
+
+        internal void ToggleReplayImportPanel()
+        {
+            this.isReplayImportPanelVisible = !this.isReplayImportPanelVisible;
+            if (this.isReplayImportPanelVisible)
+            {
+                this.replayImportStatusMessage = "Put .puckreplay files in the Imports folder, then click Import Files.";
+                this.OpenImportsFolder();
+            }
+
+            this.RefreshReplayList();
+        }
+
+        internal void ImportReplaysFromImportsFolder()
+        {
+            try
+            {
+                ReplayImportBatchResult result = this.storage.ImportReplaysFromImportsFolder();
+                if (result.FoundCount == 0)
+                {
+                    this.SetReplayLibraryStatus("No .puckreplay files were found in the Imports folder.", false);
+                    this.replayImportStatusMessage = "No .puckreplay files were found in the Imports folder.";
+                    this.RefreshReplayList();
+                    return;
+                }
+
+                if (result.FailedCount > 0)
+                {
+                    string firstError = result.Errors != null && result.Errors.Count > 0 ? " " + result.Errors[0] : string.Empty;
+                    this.SetReplayLibraryStatus("Imported " + result.ImportedCount + " of " + result.FoundCount + " replay files." + firstError, true);
+                    this.replayImportStatusMessage = this.replayLibraryStatusMessage;
+                }
+                else
+                {
+                    this.SetReplayLibraryStatus("Imported " + result.ImportedCount + " replay file" + (result.ImportedCount == 1 ? string.Empty : "s") + ".", false);
+                    this.replayImportStatusMessage = this.replayLibraryStatusMessage;
+                    this.isReplayImportPanelVisible = false;
+                }
+
+                this.RefreshLibraryText();
+                this.RefreshReplayList();
+                this.RefreshStorageUsage();
+            }
+            catch (Exception exception)
+            {
+                this.replayImportStatusMessage = "Import failed: " + exception.Message;
+                this.SetReplayLibraryStatus(this.replayImportStatusMessage, true);
+                ReplayModLog.Warning("Failed to import replay: " + exception.Message);
+                this.RefreshReplayList();
+            }
+        }
+
+        internal void ExportReplay(ReplayFileSummary replay)
+        {
+            if (replay == null || string.IsNullOrEmpty(replay.FilePath))
+            {
+                return;
+            }
+
+            try
+            {
+                string exportedPath = this.storage.ExportReplay(replay.FilePath, string.IsNullOrEmpty(replay.DisplayName) ? replay.ServerName : replay.DisplayName);
+                GUIUtility.systemCopyBuffer = exportedPath;
+                this.SetReplayLibraryStatus("Exported " + Path.GetFileName(exportedPath) + ". Path copied to clipboard.", false);
+                this.OpenExportsFolder();
+                this.RefreshReplayList();
+            }
+            catch (Exception exception)
+            {
+                this.SetReplayLibraryStatus("Export failed: " + exception.Message, true);
+                ReplayModLog.Warning("Failed to export replay " + replay.FilePath + ": " + exception.Message);
+                this.RefreshReplayList();
+            }
+        }
+
+        internal void OpenImportsFolder()
+        {
+            this.OpenFolder(this.storage.ImportsDirectory);
+        }
+
+        internal void OpenExportsFolder()
+        {
+            this.OpenFolder(this.storage.ExportsDirectory);
+        }
+
+        private void OpenFolder(string folderPath)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(folderPath))
+                {
+                    Directory.CreateDirectory(folderPath);
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = folderPath,
+                        UseShellExecute = true
+                    });
+                }
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Failed to open file location: " + exception.Message);
+            }
+        }
+
+        private void SetReplayLibraryStatus(string message, bool isError)
+        {
+            this.replayLibraryStatusMessage = message ?? string.Empty;
+            this.replayLibraryStatusIsError = isError;
         }
 
         internal void BindUpdateLabels(Label statusLabel, Label patchNotesLabel)
@@ -1443,7 +1616,9 @@ namespace PuckReplayMod
             if (this.recorder.IsRecording)
             {
                 this.statusLabel.style.display = shouldShowRecording ? DisplayStyle.Flex : DisplayStyle.None;
-                this.statusLabel.text = "REPLAY MOD  REC  " + this.recorder.CurrentTick;
+                this.statusLabel.text = !this.settings.SaveOnDisconnect && !this.recorder.IsCurrentRecordingSaveConfirmed
+                    ? "REPLAY MOD  REC UNSAVED  " + this.recorder.CurrentTick
+                    : "REPLAY MOD  REC  " + this.recorder.CurrentTick;
                 this.statusLabel.style.backgroundColor = new Color(0.55f, 0.05f, 0.06f, 0.9f);
                 return;
             }
@@ -1494,10 +1669,14 @@ namespace PuckReplayMod
             }
         }
 
-        private bool AttachReplayButton(VisualElement menu, string name)
+        private bool AttachReplayButton(VisualElement menu, string name, out Button attachedButton, out Label updateBadge)
         {
+            attachedButton = null;
+            updateBadge = null;
             if (menu == null || menu.Q<Button>(name) != null)
             {
+                attachedButton = menu != null ? menu.Q<Button>(name) : null;
+                updateBadge = attachedButton != null ? attachedButton.Q<Label>("PuckReplayModMenuUpdateBadge") : null;
                 return menu != null;
             }
 
@@ -1508,6 +1687,11 @@ namespace PuckReplayMod
                 text = "REPLAYS"
             };
             ReplayUiTools.StyleMenuAccessButton(referenceButton, button);
+            attachedButton = button;
+            updateBadge = this.CreateReplayMenuUpdateBadge();
+            button.style.position = Position.Relative;
+            button.style.overflow = Overflow.Visible;
+            button.Add(updateBadge);
 
             if (referenceButton != null && referenceButton.parent == menu)
             {
@@ -1519,6 +1703,34 @@ namespace PuckReplayMod
             }
 
             return true;
+        }
+
+        private Label CreateReplayMenuUpdateBadge()
+        {
+            Label badge = new Label("!");
+            badge.name = "PuckReplayModMenuUpdateBadge";
+            badge.pickingMode = PickingMode.Ignore;
+            badge.style.position = Position.Absolute;
+            badge.style.right = 7f;
+            badge.style.top = new StyleLength(new Length(50f, LengthUnit.Percent));
+            badge.style.translate = new StyleTranslate(new Translate(0f, new Length(-50f, LengthUnit.Percent), 0f));
+            badge.style.minWidth = 24f;
+            badge.style.height = 24f;
+            badge.style.paddingLeft = 7f;
+            badge.style.paddingRight = 7f;
+            badge.style.paddingTop = 0f;
+            badge.style.paddingBottom = 0f;
+            badge.style.fontSize = 15f;
+            badge.style.unityFontStyleAndWeight = FontStyle.Bold;
+            badge.style.unityTextAlign = TextAnchor.MiddleCenter;
+            badge.style.color = Color.black;
+            badge.style.backgroundColor = new Color(0.86f, 0.66f, 0.18f, 1f);
+            badge.style.borderTopLeftRadius = 12f;
+            badge.style.borderTopRightRadius = 12f;
+            badge.style.borderBottomLeftRadius = 12f;
+            badge.style.borderBottomRightRadius = 12f;
+            badge.style.display = DisplayStyle.None;
+            return badge;
         }
 
         private void CreateStatusIndicator()
@@ -2526,6 +2738,15 @@ namespace PuckReplayMod
                 return;
             }
 
+            if (sectionName == "Display" || sectionName == "Interface")
+            {
+                sectionName = "Display / Interface";
+            }
+            else if (sectionName == "Capture")
+            {
+                sectionName = "Playback";
+            }
+
             this.selectedSection = sectionName;
             this.ReplayList = null;
             this.StorageLabel = null;
@@ -2561,21 +2782,17 @@ namespace PuckReplayMod
             {
                 ReplayHotkeySettingsSection.Create(this, this.content);
             }
-            else if (sectionName == "Display")
+            else if (sectionName == "Display / Interface")
             {
                 ReplayOverlaySettingsSection.Create(this, this.content);
             }
-            else if (sectionName == "Capture")
+            else if (sectionName == "Playback")
             {
-                ReplayCaptureSettingsSection.Create(this, this.content);
+                ReplayPlaybackSettingsSection.Create(this, this.content);
             }
             else if (sectionName == "Storage")
             {
                 ReplayStorageSection.Create(this, this.content);
-            }
-            else if (sectionName == "Interface")
-            {
-                ReplayInterfaceSettingsSection.Create(this, this.content);
             }
             else if (sectionName == "About / Updates")
             {
@@ -2658,6 +2875,7 @@ namespace PuckReplayMod
 
         private void RefreshUpdateBadge()
         {
+            this.RefreshMenuUpdateBadges();
             if (this.updateBadgeButton == null)
             {
                 return;
@@ -2680,6 +2898,41 @@ namespace PuckReplayMod
                 : new Color(0.86f, 0.66f, 0.18f, 1f));
             this.updateBadgeButton.style.color = Color.black;
             this.UpdateSidebarSelection();
+        }
+
+        private void RefreshMenuUpdateBadges()
+        {
+            bool shouldShow = this.updateStatus == ReplayUpdateStatus.UpdateAvailable ||
+                this.updateStatus == ReplayUpdateStatus.UpdateRecommended;
+            bool recommended = this.updateStatus == ReplayUpdateStatus.UpdateRecommended;
+            this.RefreshMenuUpdateBadge(this.mainMenuReplayButton, this.mainMenuReplayUpdateBadge, shouldShow, recommended);
+            this.RefreshMenuUpdateBadge(this.pauseMenuReplayButton, this.pauseMenuReplayUpdateBadge, shouldShow, recommended);
+        }
+
+        private void RefreshMenuUpdateBadge(Button button, Label badge, bool shouldShow, bool recommended)
+        {
+            if (button == null)
+            {
+                return;
+            }
+
+            button.text = "REPLAYS";
+            button.tooltip = shouldShow
+                ? (recommended ? "Replay Mod update recommended. Open About / Updates for details." : "Replay Mod update available. Open About / Updates for details.")
+                : "Open Replay Mod.";
+
+            if (badge == null)
+            {
+                return;
+            }
+
+            badge.style.display = shouldShow ? DisplayStyle.Flex : DisplayStyle.None;
+            badge.text = recommended ? "!" : "!";
+            badge.tooltip = button.tooltip;
+            badge.style.backgroundColor = new StyleColor(recommended
+                ? new Color(0.9f, 0.16f, 0.12f, 1f)
+                : new Color(0.95f, 0.72f, 0.16f, 1f));
+            badge.style.color = Color.black;
         }
 
         private void RefreshStorageBadge()
@@ -3268,7 +3521,7 @@ namespace PuckReplayMod
 
             if (this.settings.CaptureModeHidePlayerNames)
             {
-                this.HideForCapture(uiManager.PlayerUsernames != null ? uiManager.PlayerUsernames.View : null);
+                this.HideForCapture(uiManager.Usernames != null ? uiManager.Usernames.View : null);
                 this.HideForCapture(uiManager.Announcements != null ? uiManager.Announcements.View : null);
             }
         }

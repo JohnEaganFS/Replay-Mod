@@ -33,6 +33,8 @@ namespace PuckReplayMod
         public List<ReplayTimelineEntrySummary> TimelineEvents = new List<ReplayTimelineEntrySummary>();
         public List<ReplayGameSegmentSummary> GameSegments = new List<ReplayGameSegmentSummary>();
         public bool IsFavorite;
+        public bool IsImported;
+        public long ImportedUtcTicks;
         public bool IsMetadataComplete;
         public int SummaryCacheVersion;
         public long SummaryGeneratedUtcTicks;
@@ -82,6 +84,8 @@ namespace PuckReplayMod
         public List<ReplayTimelineEntrySummary> TimelineEvents = new List<ReplayTimelineEntrySummary>();
         public List<ReplayGameSegmentSummary> GameSegments = new List<ReplayGameSegmentSummary>();
         public bool IsFavorite;
+        public bool IsImported;
+        public long ImportedUtcTicks;
         public long SummaryGeneratedUtcTicks;
         public string SummaryGeneratedByModVersion;
     }

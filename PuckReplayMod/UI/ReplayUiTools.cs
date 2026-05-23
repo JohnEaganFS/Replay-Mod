@@ -17,6 +17,8 @@ namespace PuckReplayMod
         public static readonly Color MutedTextColor = new Color(0.68f, 0.72f, 0.76f, 1f);
         private const string SvgResourcePrefix = "PuckReplayMod.Assets.";
         private static readonly Dictionary<string, VectorImage> SvgIconCache = new Dictionary<string, VectorImage>();
+        private static Label activeTooltipLabel;
+        private static VisualElement activeTooltipRoot;
 
         public static VisualElement CreateConfigurationRow()
         {
@@ -27,7 +29,121 @@ namespace PuckReplayMod
             row.style.marginTop = 5f;
             row.style.marginBottom = 5f;
             row.style.minHeight = 32f;
+            row.style.overflow = Overflow.Visible;
             return row;
+        }
+
+        public static void AttachHoverTooltip(VisualElement target, string tooltip)
+        {
+            if (target == null || string.IsNullOrEmpty(tooltip))
+            {
+                return;
+            }
+
+            target.tooltip = tooltip;
+            target.style.position = Position.Relative;
+            target.style.overflow = Overflow.Visible;
+
+            target.RegisterCallback<MouseEnterEvent>(delegate
+            {
+                ShowHoverTooltip(target, tooltip);
+            });
+            target.RegisterCallback<MouseLeaveEvent>(delegate
+            {
+                HideHoverTooltip();
+            });
+        }
+
+        private static void ShowHoverTooltip(VisualElement target, string tooltip)
+        {
+            if (target == null || target.panel == null || string.IsNullOrEmpty(tooltip))
+            {
+                return;
+            }
+
+            VisualElement root = target.panel.visualTree;
+            if (root == null)
+            {
+                return;
+            }
+
+            if (activeTooltipLabel == null || activeTooltipRoot != root)
+            {
+                activeTooltipLabel = CreateHoverTooltipLabel();
+                activeTooltipRoot = root;
+                root.Add(activeTooltipLabel);
+            }
+            else if (activeTooltipLabel.parent == null)
+            {
+                root.Add(activeTooltipLabel);
+            }
+
+            activeTooltipLabel.text = tooltip;
+            activeTooltipLabel.style.display = DisplayStyle.Flex;
+            activeTooltipLabel.BringToFront();
+            PositionHoverTooltip(target, root, activeTooltipLabel);
+            activeTooltipLabel.schedule.Execute((Action)delegate
+            {
+                PositionHoverTooltip(target, root, activeTooltipLabel);
+                activeTooltipLabel.BringToFront();
+            }).ExecuteLater(1L);
+        }
+
+        private static void HideHoverTooltip()
+        {
+            if (activeTooltipLabel != null)
+            {
+                activeTooltipLabel.style.display = DisplayStyle.None;
+            }
+        }
+
+        private static Label CreateHoverTooltipLabel()
+        {
+            Label tooltipLabel = new Label();
+            tooltipLabel.pickingMode = PickingMode.Ignore;
+            tooltipLabel.style.display = DisplayStyle.None;
+            tooltipLabel.style.position = Position.Absolute;
+            tooltipLabel.style.width = 560f;
+            tooltipLabel.style.maxWidth = 560f;
+            tooltipLabel.style.backgroundColor = new StyleColor(new Color(0.06f, 0.06f, 0.06f, 1f));
+            tooltipLabel.style.color = Color.white;
+            tooltipLabel.style.fontSize = 14f;
+            tooltipLabel.style.whiteSpace = WhiteSpace.Normal;
+            tooltipLabel.style.paddingLeft = 10f;
+            tooltipLabel.style.paddingRight = 10f;
+            tooltipLabel.style.paddingTop = 8f;
+            tooltipLabel.style.paddingBottom = 8f;
+            tooltipLabel.style.borderTopColor = new StyleColor(new Color(0.6f, 0.6f, 0.6f, 1f));
+            tooltipLabel.style.borderBottomColor = new StyleColor(new Color(0.6f, 0.6f, 0.6f, 1f));
+            tooltipLabel.style.borderLeftColor = new StyleColor(new Color(0.6f, 0.6f, 0.6f, 1f));
+            tooltipLabel.style.borderRightColor = new StyleColor(new Color(0.6f, 0.6f, 0.6f, 1f));
+            tooltipLabel.style.borderTopWidth = 1f;
+            tooltipLabel.style.borderBottomWidth = 1f;
+            tooltipLabel.style.borderLeftWidth = 1f;
+            tooltipLabel.style.borderRightWidth = 1f;
+            return tooltipLabel;
+        }
+
+        private static void PositionHoverTooltip(VisualElement target, VisualElement root, VisualElement tooltipLabel)
+        {
+            if (target == null || root == null || tooltipLabel == null)
+            {
+                return;
+            }
+
+            Rect targetRect = target.worldBound;
+            Rect rootRect = root.worldBound;
+            float width = tooltipLabel.resolvedStyle.width > 0f ? tooltipLabel.resolvedStyle.width : 560f;
+            float height = tooltipLabel.resolvedStyle.height > 0f ? tooltipLabel.resolvedStyle.height : 54f;
+            float left = Mathf.Clamp(targetRect.x - rootRect.x, 8f, Mathf.Max(8f, rootRect.width - width - 8f));
+            float top = targetRect.yMax - rootRect.y + 4f;
+            if (top + height > rootRect.height - 8f)
+            {
+                top = Mathf.Max(8f, targetRect.y - rootRect.y - height - 4f);
+            }
+
+            tooltipLabel.style.left = left;
+            tooltipLabel.style.top = top;
         }
 
         public static Label CreateConfigurationLabel(string text)
@@ -255,7 +371,10 @@ namespace PuckReplayMod
             dropdown.style.overflow = Overflow.Hidden;
             dropdown.style.backgroundColor = new StyleColor(FieldColor);
             dropdown.style.color = Color.white;
-            dropdown.style.paddingLeft = 8f;
+            dropdown.style.paddingLeft = 0f;
+            dropdown.style.paddingRight = 0f;
+            dropdown.style.paddingTop = 0f;
+            dropdown.style.paddingBottom = 0f;
             dropdown.RegisterValueChangedCallback(delegate(ChangeEvent<string> evt)
             {
                 onChanged(evt.newValue);
@@ -302,7 +421,7 @@ namespace PuckReplayMod
         public static VisualElement CreateToggleRow(string labelText, string tooltip, bool value, Action<bool> onChanged)
         {
             VisualElement row = CreateConfigurationRow();
-            row.tooltip = tooltip ?? string.Empty;
+            AttachHoverTooltip(row, tooltip);
             row.Add(CreateConfigurationLabel(labelText, tooltip));
             row.Add(CreateToggle(value, onChanged));
             return row;
@@ -316,7 +435,7 @@ namespace PuckReplayMod
         public static VisualElement CreateDropdownRow(string labelText, string tooltip, string value, List<string> choices, Action<string> onChanged)
         {
             VisualElement row = CreateConfigurationRow();
-            row.tooltip = tooltip ?? string.Empty;
+            AttachHoverTooltip(row, tooltip);
             row.Add(CreateConfigurationLabel(labelText, tooltip));
             PopupField<string> dropdown = CreateDropdown(choices, value, onChanged);
             dropdown.tooltip = tooltip ?? string.Empty;
@@ -332,7 +451,7 @@ namespace PuckReplayMod
         public static VisualElement CreateIntegerRow(string labelText, string tooltip, int value, Action<int> onChanged)
         {
             VisualElement row = CreateConfigurationRow();
-            row.tooltip = tooltip ?? string.Empty;
+            AttachHoverTooltip(row, tooltip);
             row.Add(CreateConfigurationLabel(labelText, tooltip));
             IntegerField field = CreateIntegerField(value, onChanged);
             field.tooltip = tooltip ?? string.Empty;
@@ -348,7 +467,7 @@ namespace PuckReplayMod
         public static VisualElement CreateFloatRow(string labelText, string tooltip, float value, Action<float> onChanged)
         {
             VisualElement row = CreateConfigurationRow();
-            row.tooltip = tooltip ?? string.Empty;
+            AttachHoverTooltip(row, tooltip);
             row.Add(CreateConfigurationLabel(labelText, tooltip));
             FloatField field = CreateFloatField(value, onChanged);
             field.tooltip = tooltip ?? string.Empty;
@@ -359,7 +478,7 @@ namespace PuckReplayMod
         public static VisualElement CreateFloatSliderRow(string labelText, string tooltip, float value, float min, float max, Action<float> onChanged)
         {
             VisualElement row = CreateConfigurationRow();
-            row.tooltip = tooltip ?? string.Empty;
+            AttachHoverTooltip(row, tooltip);
             row.Add(CreateConfigurationLabel(labelText, tooltip));
 
             float clampedValue = Mathf.Clamp(value, min, max);
@@ -402,7 +521,7 @@ namespace PuckReplayMod
         public static VisualElement CreateFloatSliderApplyRow(string labelText, string tooltip, float value, float min, float max, Action<float> onApply)
         {
             VisualElement row = CreateConfigurationRow();
-            row.tooltip = tooltip ?? string.Empty;
+            AttachHoverTooltip(row, tooltip);
             row.Add(CreateConfigurationLabel(labelText, tooltip));
 
             float clampedValue = Mathf.Clamp(value, min, max);
@@ -649,17 +768,16 @@ namespace PuckReplayMod
         {
             dropdown.RegisterCallback<AttachToPanelEvent>(delegate
             {
-                VisualElement input = dropdown.Q<VisualElement>(null, "unity-base-popup-field__input");
-                if (input != null)
+                ApplyDropdownInputStyle(dropdown);
+                dropdown.schedule.Execute((Action)delegate
                 {
-                    input.style.backgroundColor = new StyleColor(FieldColor);
-                    input.style.color = Color.white;
-                    input.style.flexDirection = FlexDirection.Row;
-                    input.style.justifyContent = Justify.SpaceBetween;
-                    input.style.alignItems = Align.Center;
-                    input.style.paddingLeft = 0f;
-                    input.style.paddingRight = 8f;
-                }
+                    ApplyDropdownInputStyle(dropdown);
+                }).ExecuteLater(1L);
+            });
+
+            dropdown.RegisterCallback<GeometryChangedEvent>(delegate
+            {
+                ApplyDropdownInputStyle(dropdown);
             });
 
             dropdown.RegisterCallback<MouseDownEvent>(delegate
@@ -669,6 +787,72 @@ namespace PuckReplayMod
                     StyleDropdownPopover(dropdown);
                 }).ExecuteLater(2L);
             });
+        }
+
+        private static void ApplyDropdownInputStyle(VisualElement dropdown)
+        {
+            VisualElement input = dropdown.Q<VisualElement>(null, "unity-base-popup-field__input");
+            if (input == null)
+            {
+                return;
+            }
+
+            input.style.backgroundColor = new StyleColor(FieldColor);
+            input.style.color = Color.white;
+            input.style.flexDirection = FlexDirection.Row;
+            input.style.justifyContent = Justify.Center;
+            input.style.alignItems = Align.Center;
+            input.style.position = Position.Relative;
+            input.style.height = 32f;
+            input.style.minHeight = 32f;
+            input.style.maxHeight = 32f;
+            input.style.paddingLeft = 0f;
+            input.style.paddingRight = 0f;
+            input.style.paddingTop = 0f;
+            input.style.paddingBottom = 0f;
+            input.style.marginTop = 0f;
+            input.style.marginBottom = 0f;
+
+            VisualElement textElement = input.Q<VisualElement>(null, "unity-base-popup-field__text");
+            if (textElement != null)
+            {
+                StyleDropdownSelectedText(textElement);
+            }
+
+            foreach (TextElement label in input.Query<TextElement>().Build())
+            {
+                StyleDropdownSelectedText(label);
+            }
+
+            VisualElement arrow = input.Q<VisualElement>(null, "unity-base-popup-field__arrow");
+            if (arrow != null)
+            {
+                arrow.style.position = Position.Absolute;
+                arrow.style.right = 8f;
+                arrow.style.top = new StyleLength(new Length(50f, LengthUnit.Percent));
+                arrow.style.translate = new StyleTranslate(new Translate(0f, new Length(-50f, LengthUnit.Percent), 0f));
+                arrow.style.flexGrow = 0f;
+                arrow.style.flexShrink = 0f;
+            }
+        }
+
+        private static void StyleDropdownSelectedText(VisualElement textElement)
+        {
+            textElement.style.flexGrow = 1f;
+            textElement.style.flexShrink = 1f;
+            textElement.style.alignSelf = Align.Stretch;
+            textElement.style.height = 32f;
+            textElement.style.minHeight = 32f;
+            textElement.style.maxHeight = 32f;
+            textElement.style.unityTextAlign = TextAnchor.MiddleCenter;
+            textElement.style.marginLeft = 0f;
+            textElement.style.marginRight = 0f;
+            textElement.style.marginTop = 0f;
+            textElement.style.marginBottom = 0f;
+            textElement.style.paddingLeft = 12f;
+            textElement.style.paddingRight = 24f;
+            textElement.style.paddingTop = 0f;
+            textElement.style.paddingBottom = 0f;
         }
 
         private static void StyleDropdownPopover(VisualElement dropdown)
@@ -703,6 +887,8 @@ namespace PuckReplayMod
             foreach (VisualElement item in popup.Query<VisualElement>(null, "unity-base-dropdown__item").Build())
             {
                 item.style.backgroundColor = new Color(0.2f, 0.2f, 0.2f, 0.92f);
+                item.style.minHeight = 28f;
+                item.style.alignItems = Align.Center;
 
                 VisualElement capturedItem = item;
                 capturedItem.RegisterCallback<MouseEnterEvent>(delegate

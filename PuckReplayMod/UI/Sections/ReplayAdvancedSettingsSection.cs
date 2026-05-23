@@ -9,7 +9,7 @@ namespace PuckReplayMod
             parent.Add(ReplayUiTools.CreateSectionTitle("Advanced"));
             parent.Add(ReplayUiTools.CreateNote("Extra options for troubleshooting."));
 
-            parent.Add(ReplayUiTools.CreateToggleRow("Detailed logging", ui.Settings.EnableDebugProfiling, delegate(bool value)
+            parent.Add(ReplayUiTools.CreateToggleRow("Detailed logging", "Writes extra Replay Mod timing and diagnostic logs. Leave off unless you are troubleshooting a bug or performance issue.", ui.Settings.EnableDebugProfiling, delegate(bool value)
             {
                 ui.Settings.EnableDebugProfiling = value;
                 ui.SaveSettings();

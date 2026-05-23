@@ -33,6 +33,7 @@ namespace PuckReplayMod
         private bool markerInputFailureLogged;
         private bool currentRecordingIsManual;
         private bool currentRecordingHasSeenGame;
+        private bool currentRecordingSaveConfirmed;
         private float recordingStartedRealtime;
         private float nextCaptureProfileRealtime;
         private float captureProfileEndRealtime;
@@ -66,6 +67,11 @@ namespace PuckReplayMod
             get { return this.isRecordingSuppressed; }
         }
 
+        public bool IsCurrentRecordingSaveConfirmed
+        {
+            get { return this.currentRecordingSaveConfirmed; }
+        }
+
         public void Initialize()
         {
             if (this.initialized)
@@ -97,7 +103,7 @@ namespace PuckReplayMod
                 this.StartRecording(reason);
             }
 
-            if (this.settings.EnableManualRecordingHotkey && this.IsKeyPressed(this.settings.ManualRecordingKey))
+            if (this.IsKeyPressed(this.settings.ManualRecordingKey))
             {
                 this.ToggleManualRecording();
             }
@@ -212,12 +218,13 @@ namespace PuckReplayMod
             this.autoRecordingPausedByManualStop = true;
             this.startRequested = false;
             this.startReason = null;
+            this.currentRecordingSaveConfirmed = true;
             this.StopRecording(true, "manual hotkey");
         }
 
         private void StartRecording(string reason, bool ignoreAutoRecord)
         {
-            if (this.IsRecording || (!ignoreAutoRecord && !this.settings.AutoRecord) || this.isRecordingSuppressed)
+            if (this.IsRecording || (!ignoreAutoRecord && !IsAutomaticRecordingEnabled(this.settings)) || this.isRecordingSuppressed)
             {
                 return;
             }
@@ -237,6 +244,7 @@ namespace PuckReplayMod
             this.scoreboardCaptureFailureLogged = false;
             this.currentRecordingIsManual = ignoreAutoRecord;
             this.currentRecordingHasSeenGame = false;
+            this.currentRecordingSaveConfirmed = this.settings.SaveOnDisconnect;
             if (this.settings.EnableDebugProfiling)
             {
                 this.ResetCaptureProfile(this.recordingStartedRealtime);
@@ -269,9 +277,11 @@ namespace PuckReplayMod
             }
 
             ReplaySessionData session = this.currentSession;
+            bool saveConfirmed = this.currentRecordingSaveConfirmed;
             this.currentSession = null;
             this.currentRecordingIsManual = false;
             this.currentRecordingHasSeenGame = false;
+            this.currentRecordingSaveConfirmed = false;
             this.tickAccumulator = 0f;
             this.lastRealtime = 0f;
             session.Header.EndedUtcTicks = DateTime.UtcNow.Ticks;
@@ -281,7 +291,11 @@ namespace PuckReplayMod
             if (save && session.Events.Count > 0)
             {
                 float durationSeconds = session.Header.TickRate > 0 ? session.Header.TotalTicks / (float)session.Header.TickRate : 0f;
-                if (this.settings.MinimumReplayLengthSeconds > 0 && durationSeconds < this.settings.MinimumReplayLengthSeconds)
+                if (!this.settings.SaveOnDisconnect && !saveConfirmed)
+                {
+                    ReplayModLog.Info("Discarded replay because Save on disconnect is off and the recording was not marked to save (" + durationSeconds.ToString("0.0") + "s).");
+                }
+                else if (this.settings.MinimumReplayLengthSeconds > 0 && durationSeconds < this.settings.MinimumReplayLengthSeconds)
                 {
                     ReplayModLog.Info("Discarded short replay (" + durationSeconds.ToString("0.0") + "s, minimum " + this.settings.MinimumReplayLengthSeconds + "s).");
                 }
@@ -689,7 +703,7 @@ namespace PuckReplayMod
                 return true;
             }
 
-            if (!this.settings.AutoRecord)
+            if (!IsAutomaticRecordingEnabled(this.settings))
             {
                 return false;
             }
@@ -722,6 +736,7 @@ namespace PuckReplayMod
             }
 
             bool wasManualRecording = this.currentRecordingIsManual;
+            this.currentRecordingSaveConfirmed = true;
             this.StopRecording(true, "game ended split");
             if (wasManualRecording)
             {
@@ -730,7 +745,7 @@ namespace PuckReplayMod
                 return;
             }
 
-            if (this.settings.AutoRecord && !this.isRecordingSuppressed && !this.autoRecordingPausedByManualStop && this.HasEnoughPlayersToAutoRecord())
+            if (IsAutomaticRecordingEnabled(this.settings) && !this.isRecordingSuppressed && !this.autoRecordingPausedByManualStop && this.HasEnoughPlayersToAutoRecord())
             {
                 this.startRequested = true;
                 this.startReason = "new game split";
@@ -775,7 +790,7 @@ namespace PuckReplayMod
                 return;
             }
 
-            if (this.settings == null || !this.settings.AutoRecord || !this.IsInGame() || !this.HasEnoughPlayersToAutoRecord())
+            if (this.settings == null || !IsAutomaticRecordingEnabled(this.settings) || !this.IsInGame() || !this.HasEnoughPlayersToAutoRecord())
             {
                 return;
             }
@@ -1243,11 +1258,39 @@ namespace PuckReplayMod
         {
             if (this.IsRecording)
             {
+                if (!this.settings.SaveOnDisconnect && !this.currentRecordingIsManual && !this.currentRecordingSaveConfirmed)
+                {
+                    this.ConfirmCurrentRecordingSave("manual hotkey");
+                    return;
+                }
+
                 this.StopManualRecording();
                 return;
             }
 
             this.StartManualRecording();
+        }
+
+        private void ConfirmCurrentRecordingSave(string reason)
+        {
+            if (!this.IsRecording)
+            {
+                return;
+            }
+
+            if (this.currentRecordingSaveConfirmed)
+            {
+                ReplayModLog.Info("Recording save was already confirmed (" + reason + ").");
+                return;
+            }
+
+            this.currentRecordingSaveConfirmed = true;
+            ReplayModLog.Info("Recording save confirmed (" + reason + ").");
+            Action recordingStateChanged = this.RecordingStateChanged;
+            if (recordingStateChanged != null)
+            {
+                recordingStateChanged();
+            }
         }
 
         private bool IsKeyPressed(KeyCode keyCode)
@@ -1317,6 +1360,11 @@ namespace PuckReplayMod
             }
 
             return playerManager.GetPlayers(false).Count >= minimumPlayers;
+        }
+
+        private static bool IsAutomaticRecordingEnabled(ReplayModSettings settings)
+        {
+            return settings != null && settings.RecordingMode == ReplayRecordingMode.AutomaticSave;
         }
 
         private bool ShouldSkipPlayer(Player player)

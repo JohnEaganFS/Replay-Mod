@@ -33,12 +33,20 @@ namespace PuckReplayMod
         ThirdPerson
     }
 
+    public enum ReplayRecordingMode
+    {
+        AutomaticSave,
+        ManualOnly
+    }
+
     public class ReplayModSettings
     {
         private const string Prefix = "PuckReplayMod.";
 
+        public ReplayRecordingMode RecordingMode = ReplayRecordingMode.AutomaticSave;
         public bool AutoRecord = true;
         public bool EnableManualRecordingHotkey = true;
+        public bool SaveOnDisconnect = true;
         public bool SplitRecordingsByGameEnd = false;
         public int CaptureTickRate = 30;
         public int MinimumPlayersToAutoRecord = 1;
@@ -76,11 +84,23 @@ namespace PuckReplayMod
 
         public static ReplayModSettings Load()
         {
+            bool legacyAutoRecord = PlayerPrefs.GetInt(Prefix + "AutoRecord", 1) == 1;
+            ReplayRecordingMode loadedRecordingMode = PlayerPrefs.HasKey(Prefix + "RecordingMode")
+                ? LoadEnum(Prefix + "RecordingMode", ReplayRecordingMode.AutomaticSave)
+                : (legacyAutoRecord ? ReplayRecordingMode.AutomaticSave : ReplayRecordingMode.ManualOnly);
+            bool splitRecordingsByGameEnd = PlayerPrefs.GetInt(Prefix + "SplitRecordingsByGameEnd", 0) == 1;
+            bool legacyRequireSaveConfirmation = PlayerPrefs.GetInt(Prefix + "RequireSaveConfirmation", 0) == 1 && !splitRecordingsByGameEnd;
+            bool saveOnDisconnect = PlayerPrefs.HasKey(Prefix + "SaveOnDisconnect")
+                ? PlayerPrefs.GetInt(Prefix + "SaveOnDisconnect", 1) == 1
+                : !legacyRequireSaveConfirmation;
+
             ReplayModSettings settings = new ReplayModSettings
             {
-                AutoRecord = PlayerPrefs.GetInt(Prefix + "AutoRecord", 1) == 1,
-                EnableManualRecordingHotkey = PlayerPrefs.GetInt(Prefix + "EnableManualRecordingHotkey", 1) == 1,
-                SplitRecordingsByGameEnd = PlayerPrefs.GetInt(Prefix + "SplitRecordingsByGameEnd", 0) == 1,
+                RecordingMode = loadedRecordingMode,
+                AutoRecord = loadedRecordingMode == ReplayRecordingMode.AutomaticSave,
+                EnableManualRecordingHotkey = true,
+                SaveOnDisconnect = saveOnDisconnect,
+                SplitRecordingsByGameEnd = splitRecordingsByGameEnd,
                 CaptureTickRate = Mathf.Clamp(PlayerPrefs.GetInt(Prefix + "CaptureTickRate", 30), 5, 120),
                 MinimumPlayersToAutoRecord = Mathf.Clamp(PlayerPrefs.GetInt(Prefix + "MinimumPlayersToAutoRecord", 1), 1, 64),
                 StorageLimitMb = Mathf.Max(0, PlayerPrefs.GetInt(Prefix + "StorageLimitMb", 2048)),
@@ -154,8 +174,13 @@ namespace PuckReplayMod
 
         public void Save()
         {
+            this.AutoRecord = this.RecordingMode == ReplayRecordingMode.AutomaticSave;
+            this.EnableManualRecordingHotkey = true;
+
+            PlayerPrefs.SetString(Prefix + "RecordingMode", this.RecordingMode.ToString());
             PlayerPrefs.SetInt(Prefix + "AutoRecord", this.AutoRecord ? 1 : 0);
-            PlayerPrefs.SetInt(Prefix + "EnableManualRecordingHotkey", this.EnableManualRecordingHotkey ? 1 : 0);
+            PlayerPrefs.SetInt(Prefix + "EnableManualRecordingHotkey", 1);
+            PlayerPrefs.SetInt(Prefix + "SaveOnDisconnect", this.SaveOnDisconnect ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "SplitRecordingsByGameEnd", this.SplitRecordingsByGameEnd ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "CaptureTickRate", Mathf.Clamp(this.CaptureTickRate, 5, 120));
             PlayerPrefs.SetInt(Prefix + "MinimumPlayersToAutoRecord", Mathf.Clamp(this.MinimumPlayersToAutoRecord, 1, 64));

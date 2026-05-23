@@ -10,42 +10,66 @@ namespace PuckReplayMod
         public static void Create(ReplayModUiService ui, VisualElement parent)
         {
             parent.Add(ReplayUiTools.CreateSectionTitle("Recording"));
-            parent.Add(ReplayUiTools.CreateNote("Control when replay files are created. The default settings are a good fit for most players."));
+            parent.Add(ReplayUiTools.CreateNote("Choose what Replay Mod does by itself. Manual start/stop is always available from the Hotkeys section and can be used as an override while you are in a match."));
 
-            parent.Add(ReplayUiTools.CreateToggleRow(
-                "Record games automatically",
-                "Starts recording when you join a match and saves when you leave.",
-                ui.Settings.AutoRecord,
-                delegate(bool value)
+            parent.Add(ReplayUiTools.CreateHeader("Recording Mode"));
+
+            parent.Add(ReplayUiTools.CreateDropdownRow(
+                "Recording mode",
+                "Automatic starts recording when the automatic rules are met. Manual only records only when you press the manual recording hotkey. Changing this does not stop an active recording.",
+                FormatRecordingMode(ui.Settings.RecordingMode),
+                GetRecordingModeChoices(),
+                delegate(string value)
             {
-                ui.Settings.AutoRecord = value;
-                if (!value && ui.Recorder.IsRecording)
-                {
-                    ui.Recorder.StopRecording(true, "auto-record disabled");
-                }
-
+                ui.Settings.RecordingMode = ParseRecordingMode(value);
+                ui.Settings.AutoRecord = ui.Settings.RecordingMode == ReplayRecordingMode.AutomaticSave;
                 ui.SaveSettings();
+                ui.RefreshLibraryText();
+                ui.RefreshStatusIndicator();
             }));
 
-            parent.Add(ReplayUiTools.CreateToggleRow(
-                "Split when game ends",
-                "Saves the current recording when a game ends. Automatic recording starts a new file if recording conditions are still met; manual recording stops.",
+            parent.Add(ReplayUiTools.CreateSeparator());
+            parent.Add(ReplayUiTools.CreateHeader("Save Behavior"));
+
+            parent.Add(CreateToggleRow(
+                "Save on disconnect",
+                "When enabled, Replay Mod saves the current recording when you leave a server or the client stops. Turn this off if you only want to keep recordings you manually stop or mark to save with the recording hotkey.",
+                ui.Settings.SaveOnDisconnect,
+                out _,
+                delegate(bool value)
+            {
+                ui.Settings.SaveOnDisconnect = value;
+                ui.SaveSettings();
+                ui.RefreshStatusIndicator();
+            }));
+
+            parent.Add(CreateToggleRow(
+                "Save when game ends",
+                "Saves the current replay file when a game ends. In Automatic mode, Replay Mod starts a new recording if the automatic rules are still met. In Manual only mode, the recording saves and stops.",
                 ui.Settings.SplitRecordingsByGameEnd,
+                out _,
                 delegate(bool value)
             {
                 ui.Settings.SplitRecordingsByGameEnd = value;
                 ui.SaveSettings();
+                ui.RefreshStatusIndicator();
             }));
+
+            parent.Add(ReplayUiTools.CreateSeparator());
+            parent.Add(ReplayUiTools.CreateHeader("Automatic Rules"));
 
             parent.Add(ReplayUiTools.CreateIntegerRow(
                 "Minimum players to record",
-                "Automatic recording starts only when at least this many non-replay players are in the server. Manual recording hotkeys ignore this limit.",
+                "Automatic recording starts once at least this many non-replay players are in the server. It does not stop if the player count later drops. Manual recording ignores this limit.",
                 ui.Settings.MinimumPlayersToAutoRecord,
                 delegate(int value)
             {
                 ui.Settings.MinimumPlayersToAutoRecord = Mathf.Clamp(value, 1, 64);
                 ui.SaveSettings();
             }));
+
+            parent.Add(ReplayUiTools.CreateSeparator());
+            parent.Add(ReplayUiTools.CreateHeader("Quality and File Size"));
 
             parent.Add(ReplayUiTools.CreateDropdownRow(
                 "Record rate",
@@ -69,6 +93,50 @@ namespace PuckReplayMod
                 ui.Settings.CaptureTickRate = Mathf.Clamp(parsed, 5, 120);
                 ui.SaveSettings();
             }));
+        }
+
+        private static VisualElement CreateToggleRow(string labelText, string tooltip, bool value, out Toggle toggle, Action<bool> onChanged)
+        {
+            VisualElement row = ReplayUiTools.CreateConfigurationRow();
+            ReplayUiTools.AttachHoverTooltip(row, tooltip);
+            row.Add(ReplayUiTools.CreateConfigurationLabel(labelText, tooltip));
+            toggle = ReplayUiTools.CreateToggle(value, onChanged);
+            toggle.tooltip = tooltip ?? string.Empty;
+            row.Add(toggle);
+            return row;
+        }
+
+        private static List<string> GetRecordingModeChoices()
+        {
+            return new List<string>
+            {
+                "Automatic",
+                "Manual only"
+            };
+        }
+
+        private static string FormatRecordingMode(ReplayRecordingMode mode)
+        {
+            switch (mode)
+            {
+                case ReplayRecordingMode.ManualOnly:
+                    return "Manual only";
+                default:
+                    return "Automatic";
+            }
+        }
+
+        private static ReplayRecordingMode ParseRecordingMode(string value)
+        {
+            switch (value)
+            {
+                case "Manual only":
+                    return ReplayRecordingMode.ManualOnly;
+                case "Automatic save":
+                    return ReplayRecordingMode.AutomaticSave;
+                default:
+                    return ReplayRecordingMode.AutomaticSave;
+            }
         }
 
         private static List<string> GetCaptureRateChoices()

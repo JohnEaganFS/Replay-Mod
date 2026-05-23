@@ -10,6 +10,11 @@ namespace PuckReplayMod
             parent.Add(ReplayUiTools.CreateSectionTitle("Interface"));
             parent.Add(ReplayUiTools.CreateNote("Adjust the Replay Manager window itself. Size changes give the window more room; scale changes make the whole interface larger or smaller. Press Apply when the layout feels right."));
 
+            AddInterfaceSettings(ui, parent);
+        }
+
+        public static void AddInterfaceSettings(ReplayModUiService ui, VisualElement parent)
+        {
             float draftWidth = Mathf.Clamp(ui.Settings.ManagerWindowWidthPercent, 58f, 94f);
             float draftHeight = Mathf.Clamp(ui.Settings.ManagerWindowHeightPercent, 58f, 92f);
             float draftScale = Mathf.Clamp(ui.Settings.ManagerUiScale, 0.85f, 1.3f);

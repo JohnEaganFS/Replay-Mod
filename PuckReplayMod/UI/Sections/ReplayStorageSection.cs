@@ -15,14 +15,14 @@ namespace PuckReplayMod
             ui.StorageUsageLabel.style.marginBottom = 8f;
             parent.Add(ui.StorageUsageLabel);
 
-            parent.Add(ReplayUiTools.CreateIntegerRow("Storage limit (MB)", ui.Settings.StorageLimitMb, delegate(int value)
+            parent.Add(ReplayUiTools.CreateIntegerRow("Storage limit (MB)", "Maximum disk space Replay Mod should use for saved replay files. Set to 0 for no automatic storage cap.", ui.Settings.StorageLimitMb, delegate(int value)
             {
                 ui.Settings.StorageLimitMb = Mathf.Max(0, value);
                 ui.SaveSettings();
                 ui.RefreshStorageUsage();
             }));
 
-            parent.Add(ReplayUiTools.CreateIntegerRow("Keep replays at least (sec)", ui.Settings.MinimumReplayLengthSeconds, delegate(int value)
+            parent.Add(ReplayUiTools.CreateIntegerRow("Keep replays at least (sec)", "Replays shorter than this are deleted after saving. Set to 0 to keep every replay, including very short tests.", ui.Settings.MinimumReplayLengthSeconds, delegate(int value)
             {
                 ui.Settings.MinimumReplayLengthSeconds = Mathf.Max(0, value);
                 ui.SaveSettings();
@@ -44,10 +44,12 @@ namespace PuckReplayMod
                 ui.RefreshLibraryText();
                 ui.RefreshReplayList();
             });
+            cleanupButton.tooltip = "Applies the current minimum length and storage limit immediately.";
             cleanupButton.style.marginRight = 8f;
             actions.Add(cleanupButton);
 
             Button refreshButton = ReplayUiTools.CreateButton("REFRESH", ui.RefreshStorageUsage);
+            refreshButton.tooltip = "Recalculate replay count and disk usage.";
             actions.Add(refreshButton);
 
             ui.RefreshStorageUsage();

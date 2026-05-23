@@ -9,6 +9,11 @@ namespace PuckReplayMod
             parent.Add(ReplayUiTools.CreateSectionTitle("Capture Mode"));
             parent.Add(ReplayUiTools.CreateNote("Capture Mode gives you a clean replay view for highlights and montage recording. It only hides UI while replay playback is active."));
 
+            AddCaptureSettings(ui, parent);
+        }
+
+        public static void AddCaptureSettings(ReplayModUiService ui, VisualElement parent)
+        {
             parent.Add(ReplayUiTools.CreateHeader("Quick Toggle"));
 
             parent.Add(ReplayUiTools.CreateToggleRow(

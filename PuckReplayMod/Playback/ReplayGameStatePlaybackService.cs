@@ -14,7 +14,7 @@ namespace PuckReplayMod
         private static readonly FieldInfo MinimapPlayerBodyMapField = typeof(UIMinimap).GetField("playerBodyVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly FieldInfo MinimapPuckMapField = typeof(UIMinimap).GetField("puckVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
         private static readonly MethodInfo MinimapUpdateMethod = typeof(UIMinimap).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic);
-        private static readonly FieldInfo PlayerUsernamesPlayerBodyMapField = typeof(UIPlayerUsernames).GetField("playerBodyVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
+        private static readonly FieldInfo UsernamesPlayerBodyMapField = typeof(UIUsernames).GetField("playerBodyVisualElementMap", BindingFlags.Instance | BindingFlags.NonPublic);
         private readonly ReplayModSettings settings;
         private readonly List<ReplayEventDto> events = new List<ReplayEventDto>();
         private readonly Dictionary<ulong, PlayerSnapshotPayload> playerStates = new Dictionary<ulong, PlayerSnapshotPayload>();
@@ -425,12 +425,12 @@ namespace PuckReplayMod
         public static void RemoveAllReplayObjectsFromPlayerUsernames()
         {
             UIManager uiManager = MonoBehaviourSingleton<UIManager>.Instance;
-            if (uiManager == null || uiManager.PlayerUsernames == null || PlayerUsernamesPlayerBodyMapField == null)
+            if (uiManager == null || uiManager.Usernames == null || UsernamesPlayerBodyMapField == null)
             {
                 return;
             }
 
-            Dictionary<PlayerBody, VisualElement> playerBodyRows = PlayerUsernamesPlayerBodyMapField.GetValue(uiManager.PlayerUsernames) as Dictionary<PlayerBody, VisualElement>;
+            Dictionary<PlayerBody, VisualElement> playerBodyRows = UsernamesPlayerBodyMapField.GetValue(uiManager.Usernames) as Dictionary<PlayerBody, VisualElement>;
             if (playerBodyRows == null || playerBodyRows.Count == 0)
             {
                 return;

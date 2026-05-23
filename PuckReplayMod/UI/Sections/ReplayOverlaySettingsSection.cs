@@ -7,26 +7,26 @@ namespace PuckReplayMod
     {
         public static void Create(ReplayModUiService ui, VisualElement parent)
         {
-            parent.Add(ReplayUiTools.CreateSectionTitle("On-screen Display"));
-            parent.Add(ReplayUiTools.CreateNote("Choose what Replay Mod shows on screen during recording and playback."));
+            parent.Add(ReplayUiTools.CreateSectionTitle("Display / Interface"));
+            parent.Add(ReplayUiTools.CreateNote("Choose what Replay Mod shows on screen and adjust the Replay Manager window."));
 
             parent.Add(ReplayUiTools.CreateHeader("Status and Time"));
 
-            parent.Add(ReplayUiTools.CreateToggleRow("Show status badge", ui.Settings.ShowStatusIndicator, delegate(bool value)
+            parent.Add(ReplayUiTools.CreateToggleRow("Show status badge", "Shows Replay Mod's small recording/playback status badge when the visibility rule below allows it.", ui.Settings.ShowStatusIndicator, delegate(bool value)
             {
                 ui.Settings.ShowStatusIndicator = value;
                 ui.SaveSettings();
                 ui.RefreshStatusIndicator();
             }));
 
-            parent.Add(ReplayUiTools.CreateDropdownRow("Status badge", FormatIndicatorVisibility(ui.Settings.StatusIndicatorVisibility), GetIndicatorVisibilityChoices(), delegate(string value)
+            parent.Add(ReplayUiTools.CreateDropdownRow("Status badge", "Controls when the status badge is allowed to appear. The hotkey can still temporarily hide or restore it.", FormatIndicatorVisibility(ui.Settings.StatusIndicatorVisibility), GetIndicatorVisibilityChoices(), delegate(string value)
             {
                 ui.Settings.StatusIndicatorVisibility = ParseIndicatorVisibility(value);
                 ui.SaveSettings();
                 ui.RefreshStatusIndicator();
             }));
 
-            parent.Add(ReplayUiTools.CreateDropdownRow("Status badge position", FormatOverlayPosition(ui.Settings.StatusIndicatorPosition), GetOverlayPositionChoices(), delegate(string value)
+            parent.Add(ReplayUiTools.CreateDropdownRow("Status badge position", "Moves the status badge to a preset screen corner so it can avoid vanilla UI or other mods.", FormatOverlayPosition(ui.Settings.StatusIndicatorPosition), GetOverlayPositionChoices(), delegate(string value)
             {
                 ReplayOverlayPosition parsed = ParseOverlayPosition(value);
                 ui.Settings.StatusIndicatorPosition = parsed;
@@ -34,14 +34,14 @@ namespace PuckReplayMod
                 ui.ApplyOverlayPosition(ui.StatusLabel, parsed, 76f);
             }));
 
-            parent.Add(ReplayUiTools.CreateToggleRow("Show replay time", ui.Settings.ShowPlaybackTimeline, delegate(bool value)
+            parent.Add(ReplayUiTools.CreateToggleRow("Show replay time", "Shows the small replay time readout while watching a replay, if Capture Mode has not hidden it.", ui.Settings.ShowPlaybackTimeline, delegate(bool value)
             {
                 ui.Settings.ShowPlaybackTimeline = value;
                 ui.SaveSettings();
                 ui.RefreshTimelineIndicator();
             }));
 
-            parent.Add(ReplayUiTools.CreateDropdownRow("Replay time position", FormatOverlayPosition(ui.Settings.PlaybackTimelinePosition), GetOverlayPositionChoices(), delegate(string value)
+            parent.Add(ReplayUiTools.CreateDropdownRow("Replay time position", "Moves the replay time readout to a preset screen corner.", FormatOverlayPosition(ui.Settings.PlaybackTimelinePosition), GetOverlayPositionChoices(), delegate(string value)
             {
                 ReplayOverlayPosition parsed = ParseOverlayPosition(value);
                 ui.Settings.PlaybackTimelinePosition = parsed;
@@ -50,55 +50,8 @@ namespace PuckReplayMod
             }));
 
             parent.Add(ReplayUiTools.CreateSeparator());
-            parent.Add(ReplayUiTools.CreateHeader("Chat"));
-
-            parent.Add(ReplayUiTools.CreateToggleRow("Show recorded chat", ui.Settings.ShowReplayChat, delegate(bool value)
-            {
-                ui.Settings.ShowReplayChat = value;
-                ui.SaveSettings();
-            }));
-
-            parent.Add(ReplayUiTools.CreateToggleRow("Clear chat before playback", ui.Settings.ClearChatOnPlaybackStart, delegate(bool value)
-            {
-                ui.Settings.ClearChatOnPlaybackStart = value;
-                ui.SaveSettings();
-            }));
-
-            parent.Add(ReplayUiTools.CreateSeparator());
-            parent.Add(ReplayUiTools.CreateHeader("Playback Smoothing"));
-
-            parent.Add(ReplayUiTools.CreateToggleRow("Smooth slow motion playback", "Interpolates replay bodies, sticks, and pucks between recorded ticks while playback speed is below 1x. Paused, tick-by-tick, and seeked playback still uses exact recorded ticks.", ui.Settings.EnableSlowMotionInterpolation, delegate(bool value)
-            {
-                ui.Settings.EnableSlowMotionInterpolation = value;
-                ui.SaveSettings();
-            }));
-
-            parent.Add(ReplayUiTools.CreateSeparator());
-            parent.Add(ReplayUiTools.CreateHeader("Playback Camera"));
-
-            parent.Add(ReplayUiTools.CreateFloatSliderRow("3rd person camera distance", "How far the replay camera sits behind the selected player in 3rd person POV.", ui.Settings.PlaybackThirdPersonCameraDistance, 1.5f, 12f, delegate(float value)
-            {
-                ui.Settings.PlaybackThirdPersonCameraDistance = UnityEngine.Mathf.Clamp(value, 1.5f, 12f);
-                ui.SaveSettings();
-            }));
-
-            parent.Add(ReplayUiTools.CreateFloatSliderRow("1st person FOV", "Camera field of view used only while watching a replay in 1st person POV.", ui.Settings.PlaybackFirstPersonFov, 60f, 120f, delegate(float value)
-            {
-                ui.Settings.PlaybackFirstPersonFov = UnityEngine.Mathf.Clamp(value, 60f, 120f);
-                ui.SaveSettings();
-            }));
-
-            parent.Add(ReplayUiTools.CreateToggleRow("Smooth 1st person POV", "Softens recorded look direction changes during active first-person replay playback. Paused and tick-by-tick playback still snaps exactly to the recorded tick.", ui.Settings.EnableFirstPersonCameraSmoothing, delegate(bool value)
-            {
-                ui.Settings.EnableFirstPersonCameraSmoothing = value;
-                ui.SaveSettings();
-            }));
-
-            parent.Add(ReplayUiTools.CreateFloatSliderRow("1st person smoothing speed", "Higher values follow the recorded camera more tightly. Lower values feel smoother but add more visual lag.", ui.Settings.FirstPersonCameraSmoothingSpeed, 1f, 60f, delegate(float value)
-            {
-                ui.Settings.FirstPersonCameraSmoothingSpeed = UnityEngine.Mathf.Clamp(value, 1f, 60f);
-                ui.SaveSettings();
-            }));
+            parent.Add(ReplayUiTools.CreateHeader("Replay Manager Window"));
+            ReplayInterfaceSettingsSection.AddInterfaceSettings(ui, parent);
         }
 
         private static List<string> GetIndicatorVisibilityChoices()

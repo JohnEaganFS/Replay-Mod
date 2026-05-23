@@ -6,7 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Libs Include="libs_323\*.dll" Exclude="libs_323\System.*.dll" />
+    <Libs Include="libs_897\*.dll" Exclude="libs_897\System.*.dll" />
 
     <Reference Include="@(Libs)">
       <HintPath>%(Libs.FullPath)</HintPath>
@@ -22,14 +22,10 @@
 
   <!-- Exclude decompiled game source from compilation. Keep it as None so it remains visible in IDE. -->
   <ItemGroup>
-    <Compile Remove="src\**\*.cs" />
-    <None Include="src\**\*.cs" />
-    <Compile Remove="og_src\**\*.cs" />
-    <None Include="og_src\**\*.cs" />
-    <Compile Remove="og_replaymod_src\**\*.cs" />
-    <None Include="og_replaymod_src\**\*.cs" />
-    <Compile Remove="toasterreskin_example_src\**\*.cs" />
-    <None Include="toasterreskin_example_src\**\*.cs" />
+    <Compile Remove="puck_src\**\*.cs" />
+    <None Include="puck_src\**\*.cs" />
+    <Compile Remove="other_mods_src\**\*.cs" />
+    <None Include="other_mods_src\**\*.cs" />
   </ItemGroup>
 
   <Target Name="PostBuildMoveDll" AfterTargets="Build">
