@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -7,12 +8,16 @@ namespace PuckReplayMod
 {
     public class ReplayPlaybackService
     {
+        private const int InitialPlaybackLoadSeconds = 120;
+
         private readonly ReplayModSettings settings;
         private readonly ReplayFileReader reader;
         private readonly ClientReplayRecorder recorder;
         private readonly NativeReplayPlaybackService nativePlayback;
 
         private ReplaySessionData session;
+        private Task<ReplaySessionData> pendingLoadTask;
+        private Exception pendingLoadException;
         private string currentFilePath;
         private bool isPreparingNativePlayback;
         private bool startedLocalSessionForPlayback;
@@ -102,13 +107,17 @@ namespace PuckReplayMod
         public void Play(string filePath)
         {
             this.Close();
-            this.session = this.reader.Load(filePath);
             this.currentFilePath = filePath;
+            this.pendingLoadException = null;
+            this.pendingLoadTask = Task.Run(delegate
+            {
+                return this.reader.LoadForPlaybackStart(filePath, InitialPlaybackLoadSeconds);
+            });
             this.recorder.SetRecordingSuppressed(true, "replay playback");
 
             try
             {
-                if (this.IsNativePlaybackEnvironmentReady() && this.StartNativePlayback())
+                if (this.TryCompletePendingLoad() && this.IsNativePlaybackEnvironmentReady() && this.StartNativePlayback())
                 {
                     return;
                 }
@@ -120,7 +129,7 @@ namespace PuckReplayMod
                 if (this.nativePlayback.TryStartLocalReplaySession())
                 {
                     this.startedLocalSessionForPlayback = true;
-                    ReplayModLog.Info("Preparing local native replay session for: " + filePath);
+                    ReplayModLog.Info("Preparing local native replay session while loading replay file: " + filePath);
                     return;
                 }
 
@@ -137,8 +146,19 @@ namespace PuckReplayMod
 
         public void Tick(float deltaTime)
         {
-            if (!this.IsPlaybackActive || this.session == null)
+            if (!this.IsPlaybackActive)
             {
+                return;
+            }
+
+            if (!this.TryCompletePendingLoad())
+            {
+                if (this.pendingLoadException != null)
+                {
+                    ReplayModLog.Warning("Replay file failed to load: " + this.pendingLoadException.Message);
+                    this.Close();
+                }
+
                 return;
             }
 
@@ -256,10 +276,17 @@ namespace PuckReplayMod
             this.nextSpectatorEnforceRealtime = 0f;
             this.currentFilePath = null;
             this.session = null;
+            this.pendingLoadTask = null;
+            this.pendingLoadException = null;
         }
 
         private bool StartNativePlayback()
         {
+            if (this.session == null)
+            {
+                return false;
+            }
+
             if (!this.nativePlayback.TryPlay(this.session, this.currentFilePath))
             {
                 return false;
@@ -268,6 +295,38 @@ namespace PuckReplayMod
             this.IsPlaying = true;
             this.EnforceSpectatorMode();
             ReplayModLog.Info("Playing replay with native Puck replay actors: " + this.currentFilePath);
+            return true;
+        }
+
+        private bool TryCompletePendingLoad()
+        {
+            if (this.session != null)
+            {
+                return true;
+            }
+
+            if (this.pendingLoadTask == null)
+            {
+                return false;
+            }
+
+            if (!this.pendingLoadTask.IsCompleted)
+            {
+                return false;
+            }
+
+            if (this.pendingLoadTask.IsFaulted)
+            {
+                this.pendingLoadException = this.pendingLoadTask.Exception != null
+                    ? this.pendingLoadTask.Exception.GetBaseException()
+                    : new InvalidOperationException("unknown replay load failure");
+                this.pendingLoadTask = null;
+                return false;
+            }
+
+            this.session = this.pendingLoadTask.Result;
+            this.pendingLoadTask = null;
+            ReplayModLog.Info("Replay file loaded: " + this.currentFilePath);
             return true;
         }
 

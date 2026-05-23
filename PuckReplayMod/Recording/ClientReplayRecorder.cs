@@ -11,6 +11,7 @@ namespace PuckReplayMod
 {
     public class ClientReplayRecorder
     {
+        private const int KeyframeIntervalSeconds = 30;
         private readonly ReplayModSettings settings;
         private readonly ReplayStorageService storage;
         private readonly List<Player> activeBodyPlayers = new List<Player>(16);
@@ -18,9 +19,12 @@ namespace PuckReplayMod
         private readonly List<Task<ReplaySaveResult>> pendingSaveTasks = new List<Task<ReplaySaveResult>>();
 
         private ReplaySessionData currentSession;
+        private ReplayChunkedRecordingWriter currentWriter;
         private float tickAccumulator;
         private float lastRealtime;
         private int currentTick;
+        private int currentEventCount;
+        private int nextKeyframeTick;
         private bool initialized;
         private bool isRecordingSuppressed;
         private bool autoRecordingPausedByManualStop;
@@ -31,6 +35,7 @@ namespace PuckReplayMod
         private bool transformCaptureFailureLogged;
         private bool scoreboardCaptureFailureLogged;
         private bool markerInputFailureLogged;
+        private bool streamingWriteFailureLogged;
         private bool currentRecordingIsManual;
         private bool currentRecordingHasSeenGame;
         private bool currentRecordingSaveConfirmed;
@@ -136,6 +141,7 @@ namespace PuckReplayMod
                 {
                     long captureStartTicks = this.settings.EnableDebugProfiling ? Stopwatch.GetTimestamp() : 0L;
                     this.RecordTransformFrame();
+                    this.RecordKeyframeIfDue();
                     if (this.settings.EnableDebugProfiling)
                     {
                         this.TrackCaptureProfile(Stopwatch.GetTimestamp() - captureStartTicks, realtime);
@@ -242,6 +248,7 @@ namespace PuckReplayMod
             this.stalledTickWarningLogged = false;
             this.transformCaptureFailureLogged = false;
             this.scoreboardCaptureFailureLogged = false;
+            this.streamingWriteFailureLogged = false;
             this.currentRecordingIsManual = ignoreAutoRecord;
             this.currentRecordingHasSeenGame = false;
             this.currentRecordingSaveConfirmed = this.settings.SaveOnDisconnect;
@@ -249,16 +256,31 @@ namespace PuckReplayMod
             {
                 this.ResetCaptureProfile(this.recordingStartedRealtime);
             }
+            this.currentEventCount = 0;
+            this.nextKeyframeTick = 0;
             this.currentSession = new ReplaySessionData();
             this.currentSession.Header.StartedUtcTicks = DateTime.UtcNow.Ticks;
             this.currentSession.Header.TickRate = Mathf.Max(1, this.settings.CaptureTickRate);
             this.currentSession.Header.ServerName = this.GetServerName();
             this.currentSession.Header.RecordedBy = this.GetRecorderName();
+            try
+            {
+                this.currentWriter = this.storage.CreateChunkedRecordingWriter(this.currentSession.Header);
+            }
+            catch (Exception exception)
+            {
+                this.currentSession = null;
+                ReplayModLog.Warning("Failed to start chunked replay writer: " + exception.Message);
+                return;
+            }
+
             this.RebuildActiveObjects();
 
             InitialSnapshotPayload initialSnapshot = this.BuildInitialSnapshot();
             this.TrackGameSeen(initialSnapshot.GameState);
             this.RecordEvent("InitialSnapshot", initialSnapshot);
+            this.RecordKeyframe(initialSnapshot);
+            this.nextKeyframeTick = Math.Max(1, this.currentSession.Header.TickRate * KeyframeIntervalSeconds);
             ReplayModLog.Info("Recording started (" + reason + ").");
             Action recordingStateChanged = this.RecordingStateChanged;
             if (recordingStateChanged != null)
@@ -277,8 +299,13 @@ namespace PuckReplayMod
             }
 
             ReplaySessionData session = this.currentSession;
+            ReplayChunkedRecordingWriter writer = this.currentWriter;
             bool saveConfirmed = this.currentRecordingSaveConfirmed;
+            int eventCount = this.currentEventCount;
             this.currentSession = null;
+            this.currentWriter = null;
+            this.currentEventCount = 0;
+            this.nextKeyframeTick = 0;
             this.currentRecordingIsManual = false;
             this.currentRecordingHasSeenGame = false;
             this.currentRecordingSaveConfirmed = false;
@@ -286,9 +313,9 @@ namespace PuckReplayMod
             this.lastRealtime = 0f;
             session.Header.EndedUtcTicks = DateTime.UtcNow.Ticks;
             session.Header.TotalTicks = this.currentTick;
-            session.Header.EventCount = session.Events.Count;
+            session.Header.EventCount = eventCount;
 
-            if (save && session.Events.Count > 0)
+            if (save && eventCount > 0)
             {
                 float durationSeconds = session.Header.TickRate > 0 ? session.Header.TotalTicks / (float)session.Header.TickRate : 0f;
                 if (!this.settings.SaveOnDisconnect && !saveConfirmed)
@@ -301,12 +328,26 @@ namespace PuckReplayMod
                 }
                 else
                 {
-                    this.pendingSaveTasks.Add(this.storage.SaveReplayAsync(session, this.settings.MinimumReplayLengthSeconds, this.settings.StorageLimitMb));
+                    if (writer != null)
+                    {
+                        this.pendingSaveTasks.Add(this.storage.FinalizeChunkedReplayAsync(writer, session.Header, this.settings.MinimumReplayLengthSeconds, this.settings.StorageLimitMb));
+                        writer = null;
+                    }
+                    else
+                    {
+                        this.pendingSaveTasks.Add(this.storage.SaveReplayAsync(session, this.settings.MinimumReplayLengthSeconds, this.settings.StorageLimitMb));
+                    }
+
                     ReplayModLog.Info(
-                        "Queued replay save in background (" +
+                        "Queued chunked replay finalization in background (" +
                         durationSeconds.ToString("0.0") + "s, " +
-                        session.Events.Count + " events).");
+                        eventCount + " events).");
                 }
+            }
+
+            if (writer != null)
+            {
+                writer.Abort();
             }
 
             this.ClearActiveObjects();
@@ -1127,12 +1168,61 @@ namespace PuckReplayMod
                 return;
             }
 
-            this.currentSession.Events.Add(new ReplayEventDto
+            ReplayEventDto replayEvent = new ReplayEventDto
             {
                 Tick = this.currentTick,
                 Type = type,
                 Payload = payload
-            });
+            };
+
+            try
+            {
+                if (this.currentWriter != null)
+                {
+                    this.currentWriter.AppendEvent(replayEvent);
+                }
+                else
+                {
+                    this.currentSession.Events.Add(replayEvent);
+                }
+
+                this.currentEventCount++;
+            }
+            catch (Exception exception)
+            {
+                if (!this.streamingWriteFailureLogged)
+                {
+                    this.streamingWriteFailureLogged = true;
+                    ReplayModLog.Warning("Replay chunk write failed; stopping recording without saving: " + exception.Message);
+                }
+
+                this.StopRecording(false, "chunk writer failed");
+            }
+        }
+
+        private void RecordKeyframeIfDue()
+        {
+            if (!this.IsRecording || this.currentWriter == null || this.nextKeyframeTick <= 0 || this.currentTick < this.nextKeyframeTick)
+            {
+                return;
+            }
+
+            this.RecordKeyframe(this.BuildInitialSnapshot());
+            int intervalTicks = Math.Max(1, this.currentSession.Header.TickRate * KeyframeIntervalSeconds);
+            while (this.nextKeyframeTick <= this.currentTick)
+            {
+                this.nextKeyframeTick += intervalTicks;
+            }
+        }
+
+        private void RecordKeyframe(InitialSnapshotPayload snapshot)
+        {
+            if (this.currentWriter == null || snapshot == null)
+            {
+                return;
+            }
+
+            this.currentWriter.AddKeyframe(this.currentTick, snapshot);
         }
 
         private void RebuildActiveObjects()

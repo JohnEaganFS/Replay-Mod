@@ -48,6 +48,17 @@ namespace PuckReplayMod
             this.events.Sort((left, right) => left.Tick.CompareTo(right.Tick));
         }
 
+        public void AddEvents(List<ReplayEventDto> replayEvents)
+        {
+            if (replayEvents == null || replayEvents.Count == 0)
+            {
+                return;
+            }
+
+            this.events.AddRange(replayEvents);
+            this.events.Sort((left, right) => left.Tick.CompareTo(right.Tick));
+        }
+
         public void ApplyThrough(int replayTick)
         {
             if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer)

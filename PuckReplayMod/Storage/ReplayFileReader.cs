@@ -213,6 +213,41 @@ namespace PuckReplayMod
             return session;
         }
 
+        public ReplaySessionData LoadForPlaybackStart(string filePath, int initialSeconds)
+        {
+            ReplayChunkedFileIndex index;
+            if (ReplayBinarySerializer.IsBinaryReplay(filePath) && ReplayBinarySerializer.TryReadChunkedIndex(filePath, out index))
+            {
+                int tickRate = index.Header != null ? Math.Max(1, index.Header.TickRate) : 30;
+                int totalTicks = index.Header != null ? Math.Max(0, index.Header.TotalTicks) : 0;
+                int endTick = Math.Min(totalTicks, Math.Max(tickRate, tickRate * Math.Max(10, initialSeconds)));
+                ReplaySessionData session = ReplayBinarySerializer.LoadChunkRange(filePath, index, 0, endTick);
+                session.Header = index.Header;
+                session.Keyframes = index.Keyframes ?? new List<ReplayKeyframeDto>();
+                session.IsLazyChunkRange = true;
+                session.LazyLoadedThroughTick = endTick;
+                return session;
+            }
+
+            return this.Load(filePath);
+        }
+
+        public bool TryReadChunkedIndex(string filePath, out ReplayChunkedFileIndex index)
+        {
+            index = null;
+            if (!ReplayBinarySerializer.IsBinaryReplay(filePath))
+            {
+                return false;
+            }
+
+            return ReplayBinarySerializer.TryReadChunkedIndex(filePath, out index);
+        }
+
+        public ReplaySessionData LoadChunkRange(string filePath, ReplayChunkedFileIndex index, int startTick, int endTick)
+        {
+            return ReplayBinarySerializer.LoadChunkRange(filePath, index, startTick, endTick);
+        }
+
         private JObject ReadRoot(string filePath)
         {
             using (Stream stream = OpenReplayReadStream(filePath))

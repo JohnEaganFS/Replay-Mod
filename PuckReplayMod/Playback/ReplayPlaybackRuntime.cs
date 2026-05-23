@@ -147,6 +147,11 @@ namespace PuckReplayMod
 
         public static void RunImmediateThrough(ReplayPlayer replayPlayer, int targetTick)
         {
+            RunImmediateThrough(replayPlayer, targetTick, MaxTicksPerFrame);
+        }
+
+        public static void RunImmediateThrough(ReplayPlayer replayPlayer, int targetTick, int maxTicks)
+        {
             if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer || replayPlayer == null || !replayPlayer.IsReplaying)
             {
                 return;
@@ -160,7 +165,8 @@ namespace PuckReplayMod
             int maxTick = GetMaxEventTick(replayPlayer);
             targetTick = Mathf.Min(targetTick, maxTick);
             int guard = 0;
-            while (replayPlayer.IsReplaying && replayPlayer.Tick <= targetTick && guard < MaxTicksPerFrame)
+            int guardLimit = Math.Max(1, maxTicks);
+            while (replayPlayer.IsReplaying && replayPlayer.Tick <= targetTick && guard < guardLimit)
             {
                 guard++;
                 try

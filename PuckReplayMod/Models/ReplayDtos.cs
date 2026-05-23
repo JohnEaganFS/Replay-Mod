@@ -9,6 +9,9 @@ namespace PuckReplayMod
     {
         public ReplayHeaderDto Header = new ReplayHeaderDto();
         public List<ReplayEventDto> Events = new List<ReplayEventDto>();
+        public List<ReplayKeyframeDto> Keyframes = new List<ReplayKeyframeDto>();
+        public bool IsLazyChunkRange;
+        public int LazyLoadedThroughTick;
     }
 
     [Serializable]
@@ -36,6 +39,30 @@ namespace PuckReplayMod
         public int Tick;
         public string Type;
         public object Payload;
+    }
+
+    [Serializable]
+    public class ReplayKeyframeDto
+    {
+        public int Tick;
+        public InitialSnapshotPayload Snapshot;
+    }
+
+    public class ReplayChunkedFileIndex
+    {
+        public int ContainerVersion;
+        public ReplayHeaderDto Header;
+        public List<ReplayKeyframeDto> Keyframes = new List<ReplayKeyframeDto>();
+        public List<ReplayChunkIndexEntry> Chunks = new List<ReplayChunkIndexEntry>();
+    }
+
+    public class ReplayChunkIndexEntry
+    {
+        public int FirstTick;
+        public int LastTick;
+        public int EventCount;
+        public long Offset;
+        public int Length;
     }
 
     [Serializable]

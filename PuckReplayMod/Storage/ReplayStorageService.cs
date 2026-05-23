@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using Newtonsoft.Json;
 using UnityEngine;
@@ -66,6 +67,28 @@ namespace PuckReplayMod
             });
         }
 
+        public ReplayChunkedRecordingWriter CreateChunkedRecordingWriter()
+        {
+            return this.CreateChunkedRecordingWriter(null);
+        }
+
+        public ReplayChunkedRecordingWriter CreateChunkedRecordingWriter(ReplayHeaderDto header)
+        {
+            string tempName = "recording_" + DateTime.UtcNow.ToString("yyyyMMdd_HHmmss") + "_" + Guid.NewGuid().ToString("N") + ".chunks.tmp";
+            return new ReplayChunkedRecordingWriter(Path.Combine(this.TempDirectory, tempName), header);
+        }
+
+        public Task<ReplaySaveResult> FinalizeChunkedReplayAsync(ReplayChunkedRecordingWriter writer, ReplayHeaderDto header, int minimumLengthSeconds, int storageLimitMb)
+        {
+            return Task.Run(delegate
+            {
+                lock (this.saveLock)
+                {
+                    return this.FinalizeChunkedReplayCore(writer, header, minimumLengthSeconds, storageLimitMb);
+                }
+            });
+        }
+
         private ReplaySaveResult SaveReplayCore(ReplaySessionData session, int minimumLengthSeconds, int storageLimitMb)
         {
             Stopwatch stopwatch = Stopwatch.StartNew();
@@ -82,7 +105,7 @@ namespace PuckReplayMod
             {
                 ReplayBinarySerializer.Save(tempPath, session);
                 File.Move(tempPath, finalPath);
-                this.WriteReplaySummary(finalPath, session);
+                new ReplayFileReader().ReadSummary(finalPath, this.SummariesDirectory);
 
                 if (minimumLengthSeconds > 0)
                 {
@@ -126,6 +149,229 @@ namespace PuckReplayMod
                     ElapsedMilliseconds = stopwatch.ElapsedMilliseconds
                 };
             }
+        }
+
+        private ReplaySaveResult FinalizeChunkedReplayCore(ReplayChunkedRecordingWriter writer, ReplayHeaderDto header, int minimumLengthSeconds, int storageLimitMb)
+        {
+            Stopwatch stopwatch = Stopwatch.StartNew();
+            string stamp = header != null && header.StartedUtcTicks > 0L
+                ? new DateTime(header.StartedUtcTicks, DateTimeKind.Utc).ToString("yyyyMMdd_HHmmss")
+                : DateTime.UtcNow.ToString("yyyyMMdd_HHmmss");
+            string finalPath = this.GetUniqueFilePath(this.ReplaysDirectory, "replay_" + stamp + ReplayModConstants.ReplayFileExtension);
+
+            try
+            {
+                if (writer == null)
+                {
+                    throw new InvalidOperationException("Replay chunk writer is missing.");
+                }
+
+                writer.Complete(finalPath, header);
+                new ReplayFileReader().ReadSummary(finalPath, this.SummariesDirectory);
+
+                if (minimumLengthSeconds > 0)
+                {
+                    this.CleanupShortReplays(minimumLengthSeconds);
+                }
+
+                if (storageLimitMb > 0)
+                {
+                    this.CleanupOldReplays(storageLimitMb);
+                }
+
+                FileInfo file = new FileInfo(finalPath);
+                stopwatch.Stop();
+                return new ReplaySaveResult
+                {
+                    Success = true,
+                    FilePath = finalPath,
+                    SizeBytes = file.Length,
+                    ElapsedMilliseconds = stopwatch.ElapsedMilliseconds
+                };
+            }
+            catch (Exception exception)
+            {
+                try
+                {
+                    if (writer != null)
+                    {
+                        writer.Abort();
+                    }
+                }
+                catch
+                {
+                }
+
+                try
+                {
+                    if (File.Exists(finalPath))
+                    {
+                        File.Delete(finalPath);
+                    }
+                }
+                catch
+                {
+                }
+
+                stopwatch.Stop();
+                return new ReplaySaveResult
+                {
+                    Success = false,
+                    FilePath = finalPath,
+                    ErrorMessage = exception.Message,
+                    ElapsedMilliseconds = stopwatch.ElapsedMilliseconds
+                };
+            }
+        }
+
+        public List<ReplayRecoveryCandidate> GetRecoverableRecordings()
+        {
+            List<ReplayRecoveryCandidate> candidates = new List<ReplayRecoveryCandidate>();
+            if (string.IsNullOrEmpty(this.TempDirectory) || !Directory.Exists(this.TempDirectory))
+            {
+                return candidates;
+            }
+
+            FileInfo[] files = new DirectoryInfo(this.TempDirectory).GetFiles("*.chunks.tmp");
+            foreach (FileInfo file in files)
+            {
+                ReplayRecoveryCandidate candidate;
+                List<ReplayRecoveryChunk> chunks;
+                ReplayRecoveryManifest manifest;
+                if (this.TryReadRecoveryCandidate(file, out candidate, out chunks, out manifest))
+                {
+                    candidates.Add(candidate);
+                }
+            }
+
+            return candidates
+                .OrderByDescending(candidate => candidate.CreatedUtcTicks)
+                .ToList();
+        }
+
+        public ReplayRecoveryResult RecoverUnfinishedRecordings()
+        {
+            ReplayRecoveryResult result = new ReplayRecoveryResult();
+            if (string.IsNullOrEmpty(this.TempDirectory) || !Directory.Exists(this.TempDirectory))
+            {
+                return result;
+            }
+
+            FileInfo[] files = new DirectoryInfo(this.TempDirectory).GetFiles("*.chunks.tmp");
+            result.FoundCount = files.Length;
+            foreach (FileInfo file in files)
+            {
+                try
+                {
+                    string recoveredPath = this.RecoverUnfinishedRecording(file);
+                    result.RecoveredCount++;
+                    result.RecoveredFiles.Add(recoveredPath);
+                }
+                catch (Exception exception)
+                {
+                    result.FailedCount++;
+                    result.Errors.Add(file.Name + ": " + exception.Message);
+                    ReplayModLog.Warning("Failed to recover unfinished replay " + file.FullName + ": " + exception.Message);
+                }
+            }
+
+            return result;
+        }
+
+        public ReplayRecoveryResult DiscardUnfinishedRecordings()
+        {
+            ReplayRecoveryResult result = new ReplayRecoveryResult();
+            if (string.IsNullOrEmpty(this.TempDirectory) || !Directory.Exists(this.TempDirectory))
+            {
+                return result;
+            }
+
+            FileInfo[] files = new DirectoryInfo(this.TempDirectory).GetFiles("*.chunks.tmp");
+            result.FoundCount = files.Length;
+            foreach (FileInfo file in files)
+            {
+                try
+                {
+                    file.Delete();
+                    string manifestPath = GetRecoveryManifestPath(file.FullName);
+                    if (File.Exists(manifestPath))
+                    {
+                        File.Delete(manifestPath);
+                    }
+
+                    result.DiscardedCount++;
+                }
+                catch (Exception exception)
+                {
+                    result.FailedCount++;
+                    result.Errors.Add(file.Name + ": " + exception.Message);
+                }
+            }
+
+            return result;
+        }
+
+        private string RecoverUnfinishedRecording(FileInfo file)
+        {
+            ReplayRecoveryCandidate candidate;
+            List<ReplayRecoveryChunk> chunks;
+            ReplayRecoveryManifest manifest;
+            if (!this.TryReadRecoveryCandidate(file, out candidate, out chunks, out manifest))
+            {
+                throw new InvalidDataException("No complete replay chunks were found.");
+            }
+
+            DateTime startTime = candidate.CreatedUtcTicks > 0L
+                ? new DateTime(candidate.CreatedUtcTicks, DateTimeKind.Utc)
+                : file.CreationTimeUtc;
+            string finalPath = this.GetUniqueFilePath(this.ReplaysDirectory, "replay_" + startTime.ToString("yyyyMMdd_HHmmss") + "_recovered" + ReplayModConstants.ReplayFileExtension);
+            ReplayHeaderDto header = this.BuildRecoveredHeader(candidate, manifest, chunks);
+
+            Directory.CreateDirectory(this.ReplaysDirectory);
+            using (FileStream source = File.Open(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            using (FileStream finalStream = File.Create(finalPath))
+            using (BinaryWriter finalWriter = new BinaryWriter(finalStream))
+            {
+                ReplayBinarySerializer.WritePrelude(finalWriter, ReplayModConstants.ReplayBinaryFormatVersion);
+                ReplayBinarySerializer.WriteHeaderTo(finalWriter, header);
+
+                byte[] buffer = new byte[128 * 1024];
+                for (int i = 0; i < chunks.Count; i++)
+                {
+                    ReplayRecoveryChunk chunk = chunks[i];
+                    chunk.FinalOffset = finalStream.Position;
+                    source.Seek(chunk.TempOffset, SeekOrigin.Begin);
+                    CopyBytes(source, finalStream, chunk.Length, buffer);
+                }
+
+                long indexOffset = finalStream.Position;
+                ReplayBinarySerializer.WriteFourCharacterCode(finalWriter, ReplayBinarySerializer.IndexMagic);
+                finalWriter.Write(chunks.Count);
+                for (int i = 0; i < chunks.Count; i++)
+                {
+                    ReplayRecoveryChunk chunk = chunks[i];
+                    finalWriter.Write(chunk.FirstTick);
+                    finalWriter.Write(chunk.LastTick);
+                    finalWriter.Write(chunk.EventCount);
+                    finalWriter.Write(chunk.FinalOffset);
+                    finalWriter.Write(chunk.Length);
+                }
+
+                ReplayBinarySerializer.WriteFourCharacterCode(finalWriter, ReplayBinarySerializer.FooterMagic);
+                finalWriter.Write(indexOffset);
+                finalWriter.Write(chunks.Count);
+            }
+
+            new ReplayFileReader().ReadSummary(finalPath, this.SummariesDirectory);
+            file.Delete();
+            string manifestPath = GetRecoveryManifestPath(file.FullName);
+            if (File.Exists(manifestPath))
+            {
+                File.Delete(manifestPath);
+            }
+
+            ReplayModLog.Info("Recovered unfinished replay: " + finalPath);
+            return finalPath;
         }
 
         public void CleanupOldReplays(int storageLimitMb)
@@ -491,6 +737,245 @@ namespace PuckReplayMod
                 SummaryGeneratedUtcTicks = DateTime.UtcNow.Ticks,
                 SummaryGeneratedByModVersion = ReplayModConstants.ModVersion
             };
+        }
+
+        private bool TryReadRecoveryCandidate(FileInfo file, out ReplayRecoveryCandidate candidate, out List<ReplayRecoveryChunk> chunks, out ReplayRecoveryManifest manifest)
+        {
+            candidate = null;
+            chunks = new List<ReplayRecoveryChunk>();
+            manifest = this.TryReadRecoveryManifest(file != null ? file.FullName : null);
+            if (file == null || !file.Exists || file.Length <= 0L)
+            {
+                return false;
+            }
+
+            RecoveryScanStats stats = new RecoveryScanStats();
+            try
+            {
+                using (FileStream stream = File.Open(file.FullName, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (BinaryReader reader = new BinaryReader(stream, Encoding.UTF8))
+                {
+                    while (stream.Position < stream.Length)
+                    {
+                        long chunkOffset = stream.Position;
+                        if (stream.Length - chunkOffset < 20L)
+                        {
+                            break;
+                        }
+
+                        string magic = ReadFourCharacterCode(reader);
+                        if (magic != ReplayBinarySerializer.ChunkMagic)
+                        {
+                            break;
+                        }
+
+                        int firstTick = reader.ReadInt32();
+                        int lastTick = reader.ReadInt32();
+                        int eventCount = reader.ReadInt32();
+                        int payloadLength = reader.ReadInt32();
+                        if (eventCount <= 0 || payloadLength < 0 || stream.Position + payloadLength > stream.Length)
+                        {
+                            break;
+                        }
+
+                        long payloadEnd = stream.Position + payloadLength;
+                        bool chunkValid = true;
+                        for (int eventIndex = 0; eventIndex < eventCount; eventIndex++)
+                        {
+                            try
+                            {
+                                this.UpdateRecoveryStats(stats, ReplayBinarySerializer.ReadEventFrom(reader, ReplayModConstants.ReplayBinaryFormatVersion));
+                            }
+                            catch
+                            {
+                                chunkValid = false;
+                                break;
+                            }
+                        }
+
+                        if (!chunkValid || stream.Position > payloadEnd)
+                        {
+                            break;
+                        }
+
+                        chunks.Add(new ReplayRecoveryChunk
+                        {
+                            FirstTick = firstTick,
+                            LastTick = lastTick,
+                            EventCount = eventCount,
+                            TempOffset = chunkOffset,
+                            Length = (int)(payloadEnd - chunkOffset)
+                        });
+                        stream.Position = payloadEnd;
+                    }
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            if (chunks.Count == 0 || stats.EventCount <= 0)
+            {
+                return false;
+            }
+
+            int tickRate = manifest != null && manifest.Header != null && manifest.Header.TickRate > 0 ? manifest.Header.TickRate : 30;
+            long createdTicks = manifest != null && manifest.Header != null && manifest.Header.StartedUtcTicks > 0L ? manifest.Header.StartedUtcTicks : file.CreationTimeUtc.Ticks;
+            candidate = new ReplayRecoveryCandidate
+            {
+                TempPath = file.FullName,
+                ManifestPath = GetRecoveryManifestPath(file.FullName),
+                CreatedUtcTicks = createdTicks,
+                LastWriteUtcTicks = file.LastWriteTimeUtc.Ticks,
+                ChunkCount = chunks.Count,
+                EventCount = stats.EventCount,
+                FirstTick = chunks[0].FirstTick,
+                LastTick = Math.Max(stats.LastTick, chunks[chunks.Count - 1].LastTick),
+                TickRate = tickRate,
+                ServerName = manifest != null && manifest.Header != null ? manifest.Header.ServerName : string.Empty,
+                RecordedBy = manifest != null && manifest.Header != null ? manifest.Header.RecordedBy : string.Empty,
+                SizeBytes = file.Length
+            };
+            return true;
+        }
+
+        private ReplayHeaderDto BuildRecoveredHeader(ReplayRecoveryCandidate candidate, ReplayRecoveryManifest manifest, List<ReplayRecoveryChunk> chunks)
+        {
+            ReplayHeaderDto header = manifest != null && manifest.Header != null ? manifest.Header : new ReplayHeaderDto();
+            header.Magic = ReplayModConstants.ReplayMagic;
+            header.FormatVersion = ReplayModConstants.ReplayDtoFormatVersion;
+            header.ModVersion = string.IsNullOrEmpty(header.ModVersion) ? ReplayModConstants.ModVersion : header.ModVersion;
+            header.GameVersion = string.IsNullOrEmpty(header.GameVersion) ? ReplayModConstants.TargetGameVersion : header.GameVersion;
+            header.StartedUtcTicks = candidate.CreatedUtcTicks > 0L ? candidate.CreatedUtcTicks : DateTime.UtcNow.Ticks;
+            header.EndedUtcTicks = candidate.LastWriteUtcTicks > 0L ? candidate.LastWriteUtcTicks : DateTime.UtcNow.Ticks;
+            header.TickRate = candidate.TickRate > 0 ? candidate.TickRate : 30;
+            header.TotalTicks = Math.Max(0, candidate.LastTick);
+            header.EventCount = Math.Max(0, candidate.EventCount);
+
+            RecoveryScanStats stats = new RecoveryScanStats();
+            try
+            {
+                using (FileStream stream = File.Open(candidate.TempPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (BinaryReader reader = new BinaryReader(stream, Encoding.UTF8))
+                {
+                    for (int i = 0; i < chunks.Count; i++)
+                    {
+                        ReplayRecoveryChunk chunk = chunks[i];
+                        stream.Seek(chunk.TempOffset + 20L, SeekOrigin.Begin);
+                        long payloadEnd = chunk.TempOffset + chunk.Length;
+                        for (int eventIndex = 0; eventIndex < chunk.EventCount && stream.Position < payloadEnd; eventIndex++)
+                        {
+                            this.UpdateRecoveryStats(stats, ReplayBinarySerializer.ReadEventFrom(reader, ReplayModConstants.ReplayBinaryFormatVersion));
+                        }
+                    }
+                }
+            }
+            catch
+            {
+            }
+
+            header.HasScoreboard = stats.HasScoreboard;
+            header.HasChat = stats.HasChat;
+            header.HasMarkers = stats.HasMarkers;
+            return header;
+        }
+
+        private void UpdateRecoveryStats(RecoveryScanStats stats, ReplayEventDto replayEvent)
+        {
+            if (stats == null || replayEvent == null)
+            {
+                return;
+            }
+
+            stats.EventCount++;
+            stats.LastTick = Math.Max(stats.LastTick, replayEvent.Tick);
+            if (replayEvent.Type == "ScoreboardSnapshot")
+            {
+                stats.HasScoreboard = true;
+            }
+            else if (replayEvent.Type == "ChatMessage")
+            {
+                stats.HasChat = true;
+            }
+            else if (replayEvent.Type == "Marker")
+            {
+                stats.HasMarkers = true;
+            }
+        }
+
+        private ReplayRecoveryManifest TryReadRecoveryManifest(string tempPath)
+        {
+            if (string.IsNullOrEmpty(tempPath))
+            {
+                return null;
+            }
+
+            string manifestPath = GetRecoveryManifestPath(tempPath);
+            if (!File.Exists(manifestPath))
+            {
+                return null;
+            }
+
+            try
+            {
+                return JsonConvert.DeserializeObject<ReplayRecoveryManifest>(File.ReadAllText(manifestPath));
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private static string GetRecoveryManifestPath(string tempPath)
+        {
+            return tempPath + ".recovery.json";
+        }
+
+        private static string ReadFourCharacterCode(BinaryReader reader)
+        {
+            byte[] bytes = reader.ReadBytes(4);
+            if (bytes.Length != 4)
+            {
+                throw new EndOfStreamException("Unexpected end of replay recovery chunk file.");
+            }
+
+            return Encoding.ASCII.GetString(bytes);
+        }
+
+        private static void CopyBytes(Stream source, Stream destination, int byteCount, byte[] buffer)
+        {
+            int remaining = byteCount;
+            while (remaining > 0)
+            {
+                int read = source.Read(buffer, 0, Math.Min(buffer.Length, remaining));
+                if (read <= 0)
+                {
+                    throw new EndOfStreamException("Unexpected end of replay recovery chunk file.");
+                }
+
+                destination.Write(buffer, 0, read);
+                remaining -= read;
+            }
+        }
+
+        private sealed class RecoveryScanStats
+        {
+            public int EventCount;
+            public int LastTick;
+            public bool HasScoreboard;
+            public bool HasChat;
+            public bool HasMarkers;
+        }
+
+        private sealed class ReplayRecoveryChunk
+        {
+            public int FirstTick;
+            public int LastTick;
+            public int EventCount;
+            public long TempOffset;
+            public long FinalOffset;
+            public int Length;
         }
 
         private void WriteSummaryCache(string replayPath, ReplaySummaryCache cache)

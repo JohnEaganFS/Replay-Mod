@@ -104,6 +104,7 @@ namespace PuckReplayMod
         internal VisualElement ReplayList { get; set; }
         internal Label StorageLabel { get; set; }
         internal Label StorageUsageLabel { get; set; }
+        internal Label StorageRecoveryLabel { get; set; }
         internal Label PlaybackLabel { get; set; }
         internal Label StatusLabel { get { return this.statusLabel; } }
         internal Label TimelineLabel { get { return this.timelineLabel; } }
@@ -193,6 +194,7 @@ namespace PuckReplayMod
             this.ReplayList = null;
             this.StorageLabel = null;
             this.StorageUsageLabel = null;
+            this.StorageRecoveryLabel = null;
             this.PlaybackLabel = null;
             this.updateStatusLabel = null;
             this.updateBadgeButton = null;
@@ -282,6 +284,7 @@ namespace PuckReplayMod
                 this.ReplayList = null;
                 this.StorageLabel = null;
                 this.StorageUsageLabel = null;
+                this.StorageRecoveryLabel = null;
                 this.PlaybackLabel = null;
                 this.updateStatusLabel = null;
                 this.updateBadgeButton = null;
@@ -2751,6 +2754,7 @@ namespace PuckReplayMod
             this.ReplayList = null;
             this.StorageLabel = null;
             this.StorageUsageLabel = null;
+            this.StorageRecoveryLabel = null;
             this.PlaybackLabel = null;
             this.updateStatusLabel = null;
             this.content = null;

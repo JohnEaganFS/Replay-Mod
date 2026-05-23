@@ -23,6 +23,12 @@ namespace PuckReplayMod
         private const byte EventStickSpawned = 14;
         private const byte EventStickDespawned = 15;
         private const byte EventGoalScored = 16;
+        internal const string ChunkMagic = "RCH1";
+        internal const string KeyframeMagic = "RKF1";
+        internal const string IndexMagic = "RIDX";
+        internal const string FooterMagic = "RFT1";
+        private const int ChunkedFormatVersion = 5;
+        private const int FooterSize = 16;
 
         public static bool IsBinaryReplay(string filePath)
         {
@@ -47,8 +53,7 @@ namespace PuckReplayMod
             using (FileStream stream = File.Create(filePath))
             using (BinaryWriter writer = new BinaryWriter(stream, Encoding.UTF8))
             {
-                WriteMagic(writer);
-                writer.Write(ReplayModConstants.ReplayBinaryFormatVersion);
+                WritePrelude(writer, Math.Min(ReplayModConstants.ReplayBinaryFormatVersion, 4));
                 WriteHeader(writer, session.Header);
 
                 List<ReplayEventDto> events = session.Events ?? new List<ReplayEventDto>();
@@ -88,6 +93,12 @@ namespace PuckReplayMod
                     Events = new List<ReplayEventDto>()
                 };
 
+                if (containerVersion >= ChunkedFormatVersion)
+                {
+                    ReadChunkedEventsAndKeyframes(reader, containerVersion, session);
+                    return session;
+                }
+
                 int eventCount = reader.ReadInt32();
                 if (eventCount < 0)
                 {
@@ -102,6 +113,79 @@ namespace PuckReplayMod
 
                 return session;
             }
+        }
+
+        public static bool TryReadChunkedIndex(string filePath, out ReplayChunkedFileIndex index)
+        {
+            index = null;
+            if (string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
+            {
+                return false;
+            }
+
+            using (FileStream stream = File.OpenRead(filePath))
+            using (BinaryReader reader = new BinaryReader(stream, Encoding.UTF8))
+            {
+                int containerVersion = ReadAndValidatePrelude(reader);
+                ReplayHeaderDto header = ReadHeader(reader);
+                if (containerVersion < ChunkedFormatVersion)
+                {
+                    return false;
+                }
+
+                index = ReadChunkedIndex(reader, containerVersion, header);
+                return true;
+            }
+        }
+
+        public static ReplaySessionData LoadChunkRange(string filePath, ReplayChunkedFileIndex index, int startTick, int endTick)
+        {
+            if (index == null)
+            {
+                throw new ArgumentNullException("index");
+            }
+
+            if (endTick < startTick)
+            {
+                endTick = startTick;
+            }
+
+            using (FileStream stream = File.OpenRead(filePath))
+            using (BinaryReader reader = new BinaryReader(stream, Encoding.UTF8))
+            {
+                int containerVersion = ReadAndValidatePrelude(reader);
+                ReplayHeaderDto header = ReadHeader(reader);
+                if (containerVersion < ChunkedFormatVersion)
+                {
+                    throw new InvalidDataException("Replay is not chunked.");
+                }
+
+                ReplaySessionData session = new ReplaySessionData
+                {
+                    Header = header,
+                    Events = new List<ReplayEventDto>(),
+                    Keyframes = index.Keyframes ?? new List<ReplayKeyframeDto>()
+                };
+
+                for (int i = 0; i < index.Chunks.Count; i++)
+                {
+                    ReplayChunkIndexEntry chunk = index.Chunks[i];
+                    if (chunk == null || chunk.LastTick < startTick || chunk.FirstTick > endTick)
+                    {
+                        continue;
+                    }
+
+                    ReadChunkEvents(reader, containerVersion, chunk, session.Events, startTick, endTick);
+                }
+
+                return session;
+            }
+        }
+
+        internal static void WritePrelude(BinaryWriter writer, int containerVersion)
+        {
+            WriteMagic(writer);
+            writer.Write(containerVersion);
         }
 
         private static void WriteMagic(BinaryWriter writer)
@@ -162,6 +246,11 @@ namespace PuckReplayMod
             }
 
             return version;
+        }
+
+        internal static void WriteHeaderTo(BinaryWriter writer, ReplayHeaderDto header)
+        {
+            WriteHeader(writer, header);
         }
 
         private static void WriteHeader(BinaryWriter writer, ReplayHeaderDto header)
@@ -230,6 +319,11 @@ namespace PuckReplayMod
             }
         }
 
+        internal static void WriteEventTo(BinaryWriter writer, ReplayEventDto replayEvent)
+        {
+            WriteEvent(writer, replayEvent);
+        }
+
         private static void WriteEvent(BinaryWriter writer, ReplayEventDto replayEvent)
         {
             replayEvent = replayEvent ?? new ReplayEventDto();
@@ -289,6 +383,11 @@ namespace PuckReplayMod
             }
         }
 
+        internal static ReplayEventDto ReadEventFrom(BinaryReader reader, int containerVersion)
+        {
+            return ReadEvent(reader, containerVersion);
+        }
+
         private static ReplayEventDto ReadEvent(BinaryReader reader, int containerVersion)
         {
             int tick = reader.ReadInt32();
@@ -300,6 +399,171 @@ namespace PuckReplayMod
                 Type = ToEventName(eventKind),
                 Payload = hasPayload ? ReadPayload(reader, eventKind, containerVersion) : null
             };
+        }
+
+        private static void ReadChunkedEventsAndKeyframes(BinaryReader reader, int containerVersion, ReplaySessionData session)
+        {
+            ReplayChunkedFileIndex index = ReadChunkedIndex(reader, containerVersion, session.Header);
+            int totalEvents = 0;
+            for (int i = 0; i < index.Chunks.Count; i++)
+            {
+                totalEvents += index.Chunks[i].EventCount;
+            }
+
+            session.Keyframes = index.Keyframes ?? new List<ReplayKeyframeDto>();
+            session.Events = new List<ReplayEventDto>(totalEvents);
+            for (int i = 0; i < index.Chunks.Count; i++)
+            {
+                ReadChunkEvents(reader, containerVersion, index.Chunks[i], session.Events, int.MinValue, int.MaxValue);
+            }
+        }
+
+        private static ReplayChunkedFileIndex ReadChunkedIndex(BinaryReader reader, int containerVersion, ReplayHeaderDto header)
+        {
+            Stream stream = reader.BaseStream;
+            if (stream.Length < FooterSize)
+            {
+                throw new InvalidDataException("Chunked replay is missing its footer.");
+            }
+
+            stream.Seek(-FooterSize, SeekOrigin.End);
+            string footerMagic = ReadFourCharacterCode(reader);
+            if (footerMagic != FooterMagic)
+            {
+                throw new InvalidDataException("Chunked replay footer is missing.");
+            }
+
+            long indexOffset = reader.ReadInt64();
+            int footerChunkCount = reader.ReadInt32();
+            if (indexOffset < 0L || indexOffset >= stream.Length || footerChunkCount < 0)
+            {
+                throw new InvalidDataException("Chunked replay footer is invalid.");
+            }
+
+            ReplayChunkedFileIndex index = new ReplayChunkedFileIndex
+            {
+                ContainerVersion = containerVersion,
+                Header = header,
+                Keyframes = new List<ReplayKeyframeDto>(),
+                Chunks = new List<ReplayChunkIndexEntry>(footerChunkCount)
+            };
+
+            stream.Seek(indexOffset, SeekOrigin.Begin);
+            if (PeekFourCharacterCode(reader) == KeyframeMagic)
+            {
+                ReadFourCharacterCode(reader);
+                int keyframeCount = reader.ReadInt32();
+                if (keyframeCount < 0)
+                {
+                    throw new InvalidDataException("Replay keyframe count is invalid.");
+                }
+
+                index.Keyframes = new List<ReplayKeyframeDto>(keyframeCount);
+                for (int i = 0; i < keyframeCount; i++)
+                {
+                    int tick = reader.ReadInt32();
+                    bool hasSnapshot = reader.ReadBoolean();
+                    index.Keyframes.Add(new ReplayKeyframeDto
+                    {
+                        Tick = tick,
+                        Snapshot = hasSnapshot ? ReadInitialSnapshot(reader, containerVersion) : null
+                    });
+                }
+            }
+
+            string indexMagic = ReadFourCharacterCode(reader);
+            if (indexMagic != IndexMagic)
+            {
+                throw new InvalidDataException("Chunked replay index is missing.");
+            }
+
+            int chunkCount = reader.ReadInt32();
+            if (chunkCount < 0 || chunkCount != footerChunkCount)
+            {
+                throw new InvalidDataException("Chunked replay index count is invalid.");
+            }
+
+            for (int i = 0; i < chunkCount; i++)
+            {
+                ReplayChunkIndexEntry entry = new ReplayChunkIndexEntry
+                {
+                    FirstTick = reader.ReadInt32(),
+                    LastTick = reader.ReadInt32(),
+                    EventCount = reader.ReadInt32(),
+                    Offset = reader.ReadInt64(),
+                    Length = reader.ReadInt32()
+                };
+                if (entry.EventCount < 0 || entry.Offset < 0L || entry.Length < 0)
+                {
+                    throw new InvalidDataException("Chunked replay index entry is invalid.");
+                }
+
+                index.Chunks.Add(entry);
+            }
+
+            return index;
+        }
+
+        private static void ReadChunkEvents(BinaryReader reader, int containerVersion, ReplayChunkIndexEntry chunk, List<ReplayEventDto> events, int startTick, int endTick)
+        {
+            Stream stream = reader.BaseStream;
+            stream.Seek(chunk.Offset, SeekOrigin.Begin);
+            string chunkMagic = ReadFourCharacterCode(reader);
+            if (chunkMagic != ChunkMagic)
+            {
+                throw new InvalidDataException("Replay chunk magic is invalid.");
+            }
+
+            int firstTick = reader.ReadInt32();
+            int lastTick = reader.ReadInt32();
+            int eventCount = reader.ReadInt32();
+            int payloadLength = reader.ReadInt32();
+            if (eventCount != chunk.EventCount || firstTick != chunk.FirstTick || lastTick != chunk.LastTick || payloadLength < 0)
+            {
+                throw new InvalidDataException("Replay chunk header does not match its index.");
+            }
+
+            long payloadEnd = stream.Position + payloadLength;
+            for (int eventIndex = 0; eventIndex < eventCount; eventIndex++)
+            {
+                ReplayEventDto replayEvent = ReadEvent(reader, containerVersion);
+                if (replayEvent.Tick >= startTick && replayEvent.Tick <= endTick)
+                {
+                    events.Add(replayEvent);
+                }
+            }
+
+            stream.Seek(payloadEnd, SeekOrigin.Begin);
+        }
+
+        internal static void WriteFourCharacterCode(BinaryWriter writer, string value)
+        {
+            byte[] bytes = Encoding.ASCII.GetBytes(value ?? string.Empty);
+            if (bytes.Length != 4)
+            {
+                throw new InvalidDataException("Four-character code must be exactly four bytes.");
+            }
+
+            writer.Write(bytes);
+        }
+
+        private static string ReadFourCharacterCode(BinaryReader reader)
+        {
+            byte[] bytes = reader.ReadBytes(4);
+            if (bytes.Length != 4)
+            {
+                throw new InvalidDataException("Unexpected end of replay file.");
+            }
+
+            return Encoding.ASCII.GetString(bytes);
+        }
+
+        private static string PeekFourCharacterCode(BinaryReader reader)
+        {
+            long position = reader.BaseStream.Position;
+            string value = ReadFourCharacterCode(reader);
+            reader.BaseStream.Position = position;
+            return value;
         }
 
         private static object ReadPayload(BinaryReader reader, byte eventKind, int containerVersion)
@@ -435,6 +699,11 @@ namespace PuckReplayMod
             WritePuckSnapshotList(writer, payload.Pucks);
             WriteStickSnapshotList(writer, payload.Sticks);
             WritePlayerInputList(writer, payload.PlayerInputs);
+        }
+
+        internal static void WriteInitialSnapshotTo(BinaryWriter writer, InitialSnapshotPayload payload)
+        {
+            WriteInitialSnapshot(writer, payload);
         }
 
         private static InitialSnapshotPayload ReadInitialSnapshot(BinaryReader reader, int containerVersion)

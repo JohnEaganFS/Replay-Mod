@@ -60,6 +60,7 @@ namespace PuckReplayMod
         public KeyCode CaptureModeKey = KeyCode.F10;
         public ReplayPlaybackUiInputMode PlaybackUiInputMode = ReplayPlaybackUiInputMode.Toggle;
         public bool EnableDebugProfiling = false;
+        public bool EnableKeyframeSeeking = true;
         public bool ShowStatusIndicator = true;
         public ReplayIndicatorVisibility StatusIndicatorVisibility = ReplayIndicatorVisibility.Always;
         public ReplayOverlayPosition StatusIndicatorPosition = ReplayOverlayPosition.BottomLeft;
@@ -106,6 +107,7 @@ namespace PuckReplayMod
                 StorageLimitMb = Mathf.Max(0, PlayerPrefs.GetInt(Prefix + "StorageLimitMb", 2048)),
                 MinimumReplayLengthSeconds = Mathf.Max(0, PlayerPrefs.GetInt(Prefix + "MinimumReplayLengthSeconds", 10)),
                 EnableDebugProfiling = PlayerPrefs.GetInt(Prefix + "EnableDebugProfiling", 0) == 1,
+                EnableKeyframeSeeking = PlayerPrefs.GetInt(Prefix + "EnableKeyframeSeeking", 1) == 1,
                 StatusIndicatorVisibility = LoadEnum(Prefix + "StatusIndicatorVisibility", ReplayIndicatorVisibility.Always),
                 StatusIndicatorPosition = LoadEnum(Prefix + "StatusIndicatorPosition", ReplayOverlayPosition.BottomLeft),
                 PlaybackUiInputMode = LoadEnum(Prefix + "PlaybackUiInputMode", ReplayPlaybackUiInputMode.Toggle),
@@ -194,6 +196,7 @@ namespace PuckReplayMod
             PlayerPrefs.SetString(Prefix + "CaptureModeKey", this.CaptureModeKey.ToString());
             PlayerPrefs.SetString(Prefix + "PlaybackUiInputMode", this.PlaybackUiInputMode.ToString());
             PlayerPrefs.SetInt(Prefix + "EnableDebugProfiling", this.EnableDebugProfiling ? 1 : 0);
+            PlayerPrefs.SetInt(Prefix + "EnableKeyframeSeeking", this.EnableKeyframeSeeking ? 1 : 0);
             PlayerPrefs.SetInt(Prefix + "ShowStatusIndicator", this.ShowStatusIndicator ? 1 : 0);
             PlayerPrefs.SetString(Prefix + "StatusIndicatorVisibility", this.StatusIndicatorVisibility.ToString());
             PlayerPrefs.SetString(Prefix + "StatusIndicatorPosition", this.StatusIndicatorPosition.ToString());

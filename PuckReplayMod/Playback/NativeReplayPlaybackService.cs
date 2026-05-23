@@ -11,6 +11,9 @@ namespace PuckReplayMod
     {
         private static readonly FieldInfo ReplayPuckNetworkObjectIdMapField = typeof(ReplayPlayer).GetField("replayPuckNetworkObjectIdMap", BindingFlags.Instance | BindingFlags.NonPublic);
         private const ulong ReplayOwnerClientIdOffset = 1337UL;
+        private const int MaxFastForwardSeekTicks = 3000;
+        private const int LazyLoadAheadSeconds = 30;
+        private const int LazyLoadWindowSeconds = 120;
         internal static readonly Vector3 ReplaySpectatorSpawnPosition = new Vector3(0f, 6f, 0f);
         internal static readonly Quaternion ReplaySpectatorSpawnRotation = Quaternion.Euler(22f, 0f, 0f);
 
@@ -23,6 +26,10 @@ namespace PuckReplayMod
         private ReplayPlayer replayPlayer;
         private ReplaySessionData currentSession;
         private string currentFilePath;
+        private ReplayChunkedFileIndex currentChunkedIndex;
+        private bool isLazyChunkPlayback;
+        private int lazyLoadedThroughTick;
+        private SortedList<int, List<ValueTuple<string, object>>> fullEventMap;
         private SortedList<int, List<ValueTuple<string, object>>> currentEventMap;
         private int currentTickRate = 30;
         private bool replaySpectatorCameraAdjusted;
@@ -158,6 +165,10 @@ namespace PuckReplayMod
             }
 
             this.currentSession = session;
+            this.currentChunkedIndex = this.TryLoadChunkedIndex(filePath);
+            this.isLazyChunkPlayback = session != null && session.IsLazyChunkRange && this.currentChunkedIndex != null;
+            this.lazyLoadedThroughTick = this.isLazyChunkPlayback ? Math.Max(0, session.LazyLoadedThroughTick) : this.GetSessionTotalTicks(session);
+            this.fullEventMap = eventMap;
             this.currentEventMap = eventMap;
             this.currentTickRate = session != null && session.Header != null ? Math.Max(1, session.Header.TickRate) : 30;
             this.BuildCameraTargetRoster(session);
@@ -170,7 +181,7 @@ namespace PuckReplayMod
 
             this.replaySpectatorCameraAdjusted = false;
             this.PrepareSceneForReplay();
-            this.replayPlayer.Server_StartReplay(this.CloneEventMap(), this.currentTickRate, 0);
+            this.replayPlayer.Server_StartReplay(this.CloneEventMap(this.currentEventMap), this.currentTickRate, 0);
             this.currentFilePath = filePath;
             this.IsPlaying = this.replayPlayer.IsReplaying;
             if (this.IsPlaying)
@@ -199,6 +210,7 @@ namespace PuckReplayMod
                 return;
             }
 
+            this.EnsureLazyEventsLoadedAhead();
             this.EnforcePausedReplayObjectSnapshots();
             this.gameStatePlayback.ApplyThrough(this.CurrentTick);
             this.ApplySlowMotionInterpolation();
@@ -366,10 +378,20 @@ namespace PuckReplayMod
 
             bool wasPaused = ReplayPlaybackRuntime.IsPaused;
             float speed = ReplayPlaybackRuntime.PlaybackSpeed;
-            int minTick = this.currentEventMap.Keys[0];
-            int maxTick = this.currentEventMap.Keys[this.currentEventMap.Keys.Count - 1];
+            int minTick = this.GetPlayableMinTick();
+            int maxTick = this.GetPlayableMaxTick();
             targetTick = Mathf.Clamp(targetTick, minTick, maxTick);
+            if (this.TrySeekForwardWithoutRestart(targetTick, wasPaused, speed, maxTick))
+            {
+                return true;
+            }
 
+            if ((this.settings == null || this.settings.EnableKeyframeSeeking) && this.TrySeekFromKeyframe(targetTick, wasPaused, speed, maxTick))
+            {
+                return true;
+            }
+
+            this.EnsureLazyEventsLoadedThrough(maxTick);
             this.RestoreFirstPersonTargetRenderers();
             if (this.replayPlayer.IsReplaying)
             {
@@ -377,7 +399,8 @@ namespace PuckReplayMod
             }
 
             this.PrepareSceneForReplay();
-            this.replayPlayer.Server_StartReplay(this.CloneEventMap(), this.currentTickRate, targetTick);
+            this.currentEventMap = this.fullEventMap;
+            this.replayPlayer.Server_StartReplay(this.CloneEventMap(this.currentEventMap), this.currentTickRate, targetTick);
             this.IsPlaying = this.replayPlayer.IsReplaying;
             if (!this.IsPlaying)
             {
@@ -389,6 +412,395 @@ namespace PuckReplayMod
             ReplayPlaybackRuntime.SetPaused(wasPaused);
             ReplayPlaybackRuntime.RunImmediateThrough(this.replayPlayer, targetTick);
             this.ApplyLatestTransformsThrough(targetTick);
+            ReplayPlaybackRuntime.SetPaused(targetTick >= maxTick || wasPaused);
+            this.gameStatePlayback.ApplyThrough(this.CurrentTick);
+            ReplayGameStatePlaybackService.EnsureReplayObjectsOnMinimap();
+            this.toasterReskinCompatibility.RequestApply();
+            this.ResetFirstPersonCameraSmoothing();
+            if (this.cameraMode == ReplayPlaybackCameraMode.FirstPerson)
+            {
+                this.HideFirstPersonTargetRenderers(this.GetCameraTargetPlayer());
+            }
+
+            return true;
+        }
+
+        private bool TrySeekFromKeyframe(int targetTick, bool wasPaused, float speed, int maxTick)
+        {
+            ReplayKeyframeDto keyframe = this.GetBestKeyframe(targetTick);
+            if (keyframe == null || keyframe.Snapshot == null)
+            {
+                return false;
+            }
+
+            SortedList<int, List<ValueTuple<string, object>>> keyframeEventMap = this.BuildKeyframeEventMap(keyframe, maxTick);
+            if (keyframeEventMap == null || keyframeEventMap.Count == 0)
+            {
+                return false;
+            }
+
+            this.RestoreFirstPersonTargetRenderers();
+            if (this.replayPlayer.IsReplaying)
+            {
+                this.replayPlayer.Server_StopReplay();
+            }
+
+            this.currentEventMap = keyframeEventMap;
+            this.PrepareSceneForReplay();
+            this.replayPlayer.Server_StartReplay(this.CloneEventMap(this.currentEventMap), this.currentTickRate, targetTick);
+            this.IsPlaying = this.replayPlayer.IsReplaying;
+            if (!this.IsPlaying)
+            {
+                return false;
+            }
+
+            ReplayPlaybackRuntime.Attach(this.replayPlayer);
+            ReplayPlaybackRuntime.SetPlaybackSpeed(speed);
+            ReplayPlaybackRuntime.SetPaused(wasPaused);
+            ReplayPlaybackRuntime.RunImmediateThrough(this.replayPlayer, targetTick, Math.Max(1, targetTick - keyframe.Tick + 2));
+            this.ApplyLatestTransformsThrough(targetTick);
+            ReplayPlaybackRuntime.SetPaused(targetTick >= maxTick || wasPaused);
+            this.gameStatePlayback.ApplyThrough(this.CurrentTick);
+            ReplayGameStatePlaybackService.EnsureReplayObjectsOnMinimap();
+            this.toasterReskinCompatibility.RequestApply();
+            this.ResetFirstPersonCameraSmoothing();
+            if (this.cameraMode == ReplayPlaybackCameraMode.FirstPerson)
+            {
+                this.HideFirstPersonTargetRenderers(this.GetCameraTargetPlayer());
+            }
+
+            return true;
+        }
+
+        private SortedList<int, List<ValueTuple<string, object>>> BuildKeyframeEventMap(ReplayKeyframeDto keyframe, int maxTick)
+        {
+            if (keyframe == null || this.currentSession == null)
+            {
+                return null;
+            }
+
+            SortedList<int, List<ValueTuple<string, object>>> chunkedMap = this.BuildKeyframeEventMapFromChunks(keyframe, maxTick);
+            if (chunkedMap != null && chunkedMap.Count > 0)
+            {
+                return chunkedMap;
+            }
+
+            if (this.currentSession.Events == null)
+            {
+                return null;
+            }
+
+            ReplaySessionData partialSession = new ReplaySessionData
+            {
+                Header = this.currentSession.Header,
+                Events = new List<ReplayEventDto>()
+            };
+            partialSession.Events.Add(new ReplayEventDto
+            {
+                Tick = keyframe.Tick,
+                Type = "InitialSnapshot",
+                Payload = keyframe.Snapshot
+            });
+
+            for (int i = 0; i < this.currentSession.Events.Count; i++)
+            {
+                ReplayEventDto replayEvent = this.currentSession.Events[i];
+                if (replayEvent != null && replayEvent.Tick > keyframe.Tick)
+                {
+                    partialSession.Events.Add(replayEvent);
+                }
+            }
+
+            return this.converter.Convert(partialSession);
+        }
+
+        private ReplayChunkedFileIndex TryLoadChunkedIndex(string filePath)
+        {
+            try
+            {
+                ReplayChunkedFileIndex index;
+                return ReplayBinarySerializer.TryReadChunkedIndex(filePath, out index) ? index : null;
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Chunked replay index unavailable; using full replay event data for seeks: " + exception.Message);
+                return null;
+            }
+        }
+
+        private void EnsureLazyEventsLoadedAhead()
+        {
+            if (!this.isLazyChunkPlayback || this.currentSession == null || this.currentChunkedIndex == null)
+            {
+                return;
+            }
+
+            int totalTicks = this.GetSessionTotalTicks(this.currentSession);
+            if (this.lazyLoadedThroughTick >= totalTicks)
+            {
+                return;
+            }
+
+            int lookAheadTicks = Math.Max(1, this.currentTickRate * LazyLoadAheadSeconds);
+            if (this.CurrentTick + lookAheadTicks < this.lazyLoadedThroughTick)
+            {
+                return;
+            }
+
+            int desiredEndTick = Math.Min(totalTicks, this.lazyLoadedThroughTick + Math.Max(1, this.currentTickRate * LazyLoadWindowSeconds));
+            this.EnsureLazyEventsLoadedThrough(desiredEndTick);
+        }
+
+        private void EnsureLazyEventsLoadedThrough(int targetTick)
+        {
+            if (!this.isLazyChunkPlayback || this.currentSession == null || this.currentChunkedIndex == null || string.IsNullOrEmpty(this.currentFilePath))
+            {
+                return;
+            }
+
+            int totalTicks = this.GetSessionTotalTicks(this.currentSession);
+            targetTick = Mathf.Clamp(targetTick, 0, totalTicks);
+            if (targetTick <= this.lazyLoadedThroughTick)
+            {
+                return;
+            }
+
+            int startTick = this.lazyLoadedThroughTick + 1;
+            try
+            {
+                ReplaySessionData rangeSession = ReplayBinarySerializer.LoadChunkRange(this.currentFilePath, this.currentChunkedIndex, startTick, targetTick);
+                if (rangeSession == null || rangeSession.Events == null || rangeSession.Events.Count == 0)
+                {
+                    this.lazyLoadedThroughTick = targetTick;
+                    this.currentSession.LazyLoadedThroughTick = this.lazyLoadedThroughTick;
+                    return;
+                }
+
+                SortedList<int, List<ValueTuple<string, object>>> additionalEventMap = this.converter.ConvertAdditional(rangeSession);
+                this.MergeEventMap(this.currentEventMap, additionalEventMap);
+                this.MergeEventMap(this.fullEventMap, additionalEventMap);
+                if (this.replayPlayer != null && this.replayPlayer.EventMap != null)
+                {
+                    this.MergeEventMap(this.replayPlayer.EventMap, additionalEventMap);
+                }
+
+                this.AddLazyEventsToLoadedSession(rangeSession.Events, targetTick);
+                if (this.settings != null && this.settings.EnableDebugProfiling)
+                {
+                    ReplayModLog.Info(
+                        "Lazy-loaded replay chunks: start=" + startTick +
+                        ", end=" + targetTick +
+                        ", events=" + rangeSession.Events.Count + ".");
+                }
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Lazy replay chunk load failed: " + exception.Message);
+            }
+        }
+
+        private void AddLazyEventsToLoadedSession(List<ReplayEventDto> events, int loadedThroughTick)
+        {
+            if (this.currentSession == null)
+            {
+                return;
+            }
+
+            if (this.currentSession.Events == null)
+            {
+                this.currentSession.Events = new List<ReplayEventDto>();
+            }
+
+            int previousLoadedThroughTick = this.lazyLoadedThroughTick;
+            List<ReplayEventDto> newlyLoadedEvents = new List<ReplayEventDto>();
+            if (events != null)
+            {
+                for (int i = 0; i < events.Count; i++)
+                {
+                    ReplayEventDto replayEvent = events[i];
+                    if (replayEvent != null && replayEvent.Tick > previousLoadedThroughTick)
+                    {
+                        this.currentSession.Events.Add(replayEvent);
+                        newlyLoadedEvents.Add(replayEvent);
+                    }
+                }
+
+                this.gameStatePlayback.AddEvents(newlyLoadedEvents);
+                this.AppendCameraTargetRoster(newlyLoadedEvents);
+            }
+
+            this.lazyLoadedThroughTick = Math.Max(this.lazyLoadedThroughTick, loadedThroughTick);
+            this.currentSession.LazyLoadedThroughTick = this.lazyLoadedThroughTick;
+        }
+
+        private void AppendCameraTargetRoster(List<ReplayEventDto> events)
+        {
+            if (events == null || events.Count == 0)
+            {
+                return;
+            }
+
+            int sequenceOffset = this.cameraTargetTimeline.Count;
+            for (int i = 0; i < events.Count; i++)
+            {
+                ReplayEventDto replayEvent = events[i];
+                if (replayEvent != null)
+                {
+                    this.TrackCameraTargetPayload(replayEvent.Type, replayEvent.Tick, sequenceOffset + i, replayEvent.Payload);
+                }
+            }
+
+            this.cameraTargetTimeline.Sort(delegate(CameraTargetTimelineEvent left, CameraTargetTimelineEvent right)
+            {
+                int tickCompare = left.Tick.CompareTo(right.Tick);
+                return tickCompare != 0 ? tickCompare : left.Sequence.CompareTo(right.Sequence);
+            });
+        }
+
+        private void MergeEventMap(SortedList<int, List<ValueTuple<string, object>>> target, SortedList<int, List<ValueTuple<string, object>>> source)
+        {
+            if (target == null || source == null || source.Count == 0)
+            {
+                return;
+            }
+
+            foreach (KeyValuePair<int, List<ValueTuple<string, object>>> entry in source)
+            {
+                List<ValueTuple<string, object>> events;
+                if (!target.TryGetValue(entry.Key, out events))
+                {
+                    target.Add(entry.Key, new List<ValueTuple<string, object>>(entry.Value));
+                    continue;
+                }
+
+                events.AddRange(entry.Value);
+            }
+        }
+
+        private int GetSessionTotalTicks(ReplaySessionData session)
+        {
+            return session != null && session.Header != null ? Math.Max(0, session.Header.TotalTicks) : 0;
+        }
+
+        private SortedList<int, List<ValueTuple<string, object>>> BuildKeyframeEventMapFromChunks(ReplayKeyframeDto keyframe, int maxTick)
+        {
+            if (keyframe == null || keyframe.Snapshot == null || this.currentChunkedIndex == null || string.IsNullOrEmpty(this.currentFilePath))
+            {
+                return null;
+            }
+
+            try
+            {
+                this.EnsureLazyEventsLoadedThrough(maxTick);
+                ReplaySessionData rangeSession = ReplayBinarySerializer.LoadChunkRange(this.currentFilePath, this.currentChunkedIndex, keyframe.Tick + 1, maxTick);
+                ReplaySessionData partialSession = new ReplaySessionData
+                {
+                    Header = this.currentSession.Header,
+                    Events = new List<ReplayEventDto>(),
+                    Keyframes = this.currentSession.Keyframes
+                };
+                partialSession.Events.Add(new ReplayEventDto
+                {
+                    Tick = keyframe.Tick,
+                    Type = "InitialSnapshot",
+                    Payload = keyframe.Snapshot
+                });
+
+                if (rangeSession.Events != null)
+                {
+                    partialSession.Events.AddRange(rangeSession.Events);
+                }
+
+                if (this.settings != null && this.settings.EnableDebugProfiling)
+                {
+                    ReplayModLog.Info(
+                        "Loaded replay seek range from chunks: keyframe=" + keyframe.Tick +
+                        ", end=" + maxTick +
+                        ", events=" + partialSession.Events.Count + ".");
+                }
+
+                return this.converter.Convert(partialSession);
+            }
+            catch (Exception exception)
+            {
+                ReplayModLog.Warning("Chunk range seek load failed; falling back to in-memory replay events: " + exception.Message);
+                return null;
+            }
+        }
+
+        private ReplayKeyframeDto GetBestKeyframe(int targetTick)
+        {
+            if (this.currentSession == null || this.currentSession.Keyframes == null || this.currentSession.Keyframes.Count == 0)
+            {
+                return null;
+            }
+
+            ReplayKeyframeDto best = null;
+            for (int i = 0; i < this.currentSession.Keyframes.Count; i++)
+            {
+                ReplayKeyframeDto keyframe = this.currentSession.Keyframes[i];
+                if (keyframe == null || keyframe.Snapshot == null || keyframe.Tick > targetTick)
+                {
+                    continue;
+                }
+
+                if (best == null || keyframe.Tick > best.Tick)
+                {
+                    best = keyframe;
+                }
+            }
+
+            return best;
+        }
+
+        private int GetPlayableMinTick()
+        {
+            if (this.currentSession != null && this.currentSession.Events != null && this.currentSession.Events.Count > 0)
+            {
+                int minTick = int.MaxValue;
+                for (int i = 0; i < this.currentSession.Events.Count; i++)
+                {
+                    ReplayEventDto replayEvent = this.currentSession.Events[i];
+                    if (replayEvent != null && replayEvent.Tick < minTick)
+                    {
+                        minTick = replayEvent.Tick;
+                    }
+                }
+
+                return minTick == int.MaxValue ? 0 : minTick;
+            }
+
+            return this.currentEventMap != null && this.currentEventMap.Count > 0 ? this.currentEventMap.Keys[0] : 0;
+        }
+
+        private int GetPlayableMaxTick()
+        {
+            if (this.currentSession != null && this.currentSession.Header != null && this.currentSession.Header.TotalTicks > 0)
+            {
+                return this.currentSession.Header.TotalTicks;
+            }
+
+            return this.currentEventMap != null && this.currentEventMap.Count > 0 ? this.currentEventMap.Keys[this.currentEventMap.Count - 1] : 0;
+        }
+
+        private bool TrySeekForwardWithoutRestart(int targetTick, bool wasPaused, float speed, int maxTick)
+        {
+            int currentTick = this.CurrentTick;
+            int deltaTicks = targetTick - currentTick;
+            if (deltaTicks < 0 || deltaTicks > MaxFastForwardSeekTicks)
+            {
+                return false;
+            }
+
+            ReplayPlaybackRuntime.SetPlaybackSpeed(speed);
+            ReplayPlaybackRuntime.RunImmediateThrough(this.replayPlayer, targetTick, deltaTicks + 2);
+            if (this.CurrentTick < targetTick)
+            {
+                return false;
+            }
+
+            this.ApplyLatestTransformsThrough(targetTick);
+            ReplayPlaybackRuntime.SetVisibleTick(this.replayPlayer, targetTick);
             ReplayPlaybackRuntime.SetPaused(targetTick >= maxTick || wasPaused);
             this.gameStatePlayback.ApplyThrough(this.CurrentTick);
             ReplayGameStatePlaybackService.EnsureReplayObjectsOnMinimap();
@@ -460,6 +872,10 @@ namespace PuckReplayMod
             this.IsPlaying = false;
             this.currentSession = null;
             this.currentFilePath = null;
+            this.currentChunkedIndex = null;
+            this.isLazyChunkPlayback = false;
+            this.lazyLoadedThroughTick = 0;
+            this.fullEventMap = null;
             this.currentEventMap = null;
             this.pausedBodySnapshots.Clear();
             this.pausedStickSnapshots.Clear();
@@ -1025,15 +1441,15 @@ namespace PuckReplayMod
             }
         }
 
-        private SortedList<int, List<ValueTuple<string, object>>> CloneEventMap()
+        private SortedList<int, List<ValueTuple<string, object>>> CloneEventMap(SortedList<int, List<ValueTuple<string, object>>> source)
         {
             SortedList<int, List<ValueTuple<string, object>>> clone = new SortedList<int, List<ValueTuple<string, object>>>();
-            if (this.currentEventMap == null)
+            if (source == null)
             {
                 return clone;
             }
 
-            foreach (KeyValuePair<int, List<ValueTuple<string, object>>> entry in this.currentEventMap)
+            foreach (KeyValuePair<int, List<ValueTuple<string, object>>> entry in source)
             {
                 clone.Add(entry.Key, new List<ValueTuple<string, object>>(entry.Value));
             }

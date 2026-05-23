@@ -1,9 +1,14 @@
 {
-  "latestVersion": "0.1.4",
-  "minimumRecommendedVersion": "0.1.4",
+  "latestVersion": "0.1.5",
+  "minimumRecommendedVersion": "0.1.5",
   "downloadUrl": "https://steamcommunity.com/sharedfiles/filedetails/?id=3726818657",
-  "notes": "- Updated Replay Mod for Puck 897.\n- Added replay import/export polish, imported replay metadata, and imported badges.\n- Added library search, filtering, and category-based sorting with ascending/descending order.\n- Refined recording settings with Save on Disconnect and clearer Recording/Playback/Display section organization.\n- Improved update visibility with main-menu/pause-menu update badges and cleaner About / Updates release notes.\n- Polished Replay Manager layout, dropdown alignment, sliders, window sizing, and tooltips.",
+  "notes": "- Added chunked replay writing to reduce end-of-match save hangs on larger recordings.\n- Added 30-second keyframes and faster seek paths for large timeline jumps.\n- Added lazy chunk loading so long replays can start playback and continue loading ranges as needed.\n- Added best-effort recovery tools for unfinished temp recordings after crashes or force closes.\n- Added an Advanced tester option to compare fast keyframe seeking against the fallback seek path.\n- Improved replay storage, loading, and seeking internals while preserving exact recorded replay data.",
   "releases": [
+    {
+      "version": "0.1.5",
+      "date": "2026-05-23",
+      "notes": "- Added chunked replay writing to reduce end-of-match save hangs on larger recordings.\n- Added 30-second keyframes and faster seek paths for large timeline jumps.\n- Added lazy chunk loading so long replays can start playback and continue loading ranges as needed.\n- Added best-effort recovery tools for unfinished temp recordings after crashes or force closes.\n- Added an Advanced tester option to compare fast keyframe seeking against the fallback seek path.\n- Improved replay storage, loading, and seeking internals while preserving exact recorded replay data."
+    },
     {
       "version": "0.1.4",
       "date": "2026-05-22",

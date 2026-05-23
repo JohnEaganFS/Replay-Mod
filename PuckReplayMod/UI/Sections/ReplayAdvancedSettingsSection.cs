@@ -14,6 +14,12 @@ namespace PuckReplayMod
                 ui.Settings.EnableDebugProfiling = value;
                 ui.SaveSettings();
             }));
+
+            parent.Add(ReplayUiTools.CreateToggleRow("Fast keyframe seeking", "Uses 30-second replay keyframes for faster large timeline jumps. Turn this off to compare seek speed against the full replay seek path when testing.", ui.Settings.EnableKeyframeSeeking, delegate(bool value)
+            {
+                ui.Settings.EnableKeyframeSeeking = value;
+                ui.SaveSettings();
+            }));
         }
     }
 }

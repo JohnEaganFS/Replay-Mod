@@ -35,6 +35,16 @@ namespace PuckReplayMod
             this.stickMoveEvents = 0;
             this.puckMoveEvents = 0;
 
+            return this.ConvertInternal(session);
+        }
+
+        public SortedList<int, List<ValueTuple<string, object>>> ConvertAdditional(ReplaySessionData session)
+        {
+            return this.ConvertInternal(session);
+        }
+
+        private SortedList<int, List<ValueTuple<string, object>>> ConvertInternal(ReplaySessionData session)
+        {
             SortedList<int, List<ValueTuple<string, object>>> eventMap = new SortedList<int, List<ValueTuple<string, object>>>();
             if (session == null)
             {
